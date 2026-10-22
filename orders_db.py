@@ -3,6 +3,7 @@
 # =============================================================
 import sqlite3
 import json
+import os
 from datetime import datetime
 
 DB_FILE = "orders.db"
@@ -156,7 +157,7 @@ def save_order(data, master_id, driver_id, master_message_id=None):
           data.get('trailer_info','-'), data.get('loading_point',''),
           data.get('unloading_point',''), data.get('shipper_handed_by',''),
           data.get('consignee_received_by',''),
-          data.get('release_allowed_by','Руководитель'),
+          data.get('release_allowed_by', os.environ.get('RELEASE_ALLOWED_BY', 'Руководитель')),
           data.get('cargo_accepted_by',''), cargos_json,
           datetime.now().strftime("%Y-%m-%d %H:%M:%S"), master_message_id))
     order_id = cursor.lastrowid

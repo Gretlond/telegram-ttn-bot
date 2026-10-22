@@ -22,6 +22,7 @@ TEMPLATE = "Шаблоны/Шаблон_ТТН.docx"
 DEMO_TEMPLATE = "assets/Шаблон_ТТН_демо.docx"
 RESULT_FOLDER = "Результат"
 COMPANY_NAME = os.environ.get("COMPANY_NAME", "ООО «Демо-Строй»")
+RELEASE_ALLOWED_BY = os.environ.get("RELEASE_ALLOWED_BY", "Руководитель")
 
 MONTHS_RU = {
     '01': 'января', '02': 'февраля', '03': 'марта',
@@ -54,7 +55,7 @@ def fill_documents(data, output_name):
         'consignee': COMPANY_NAME,
         'release_basis': 'Распоряжение директора',
         'loading_point': '', 'unloading_point': '',
-        'release_allowed_by': 'Руководитель',
+        'release_allowed_by': RELEASE_ALLOWED_BY,
         'shipper_handed_by': '', 'consignee_received_by': '',
         'total_mass_text': '', 'total_places_text': '',
         'total_vat_text': '', 'total_vat_cents': '00',

@@ -87,6 +87,7 @@ python create_template.py
 | `COMPANY_NAME` | название организации для документов |
 | `COMPANY_SHORT_NAME` | короткое название для заголовка реестра |
 | `REGISTRY_MASTER_NAME` | подпись мастера в реестре |
+| `RELEASE_ALLOWED_BY` | подпись «Отпуск разрешил» в ТТН |
 | `AIAI_API_KEY` | необязательный ключ для `ai_worker.py` |
 
 `.env` исключён из git. В репозитории есть только `.env.example`.

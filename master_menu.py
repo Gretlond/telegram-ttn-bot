@@ -411,7 +411,7 @@ def rebuild_word_from_order(order_id):
         'driver_name': driver_clean,
         'shipper_handed_by': order.get('shipper_handed_by', ''),
         'consignee_received_by': order.get('consignee_received_by', ''),
-        'release_allowed_by': order.get('release_allowed_by', 'Руководитель'),
+        'release_allowed_by': order.get('release_allowed_by', os.environ.get('RELEASE_ALLOWED_BY', 'Руководитель')),
         'cargo_accepted_by': cargo_accepted,
         'total_qty': total_mass_str,
         'total_mass_text': total_mass_text,
