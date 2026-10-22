@@ -1,0 +1,119 @@
+from docx import Document
+
+
+def test_money_to_words_parts():
+    from utils import amount_to_words_parts
+
+    assert amount_to_words_parts(350.40) == ("триста пятьдесят", "40")
+    assert amount_to_words_parts(61.5) == ("шестьдесят один", "50")
+    assert amount_to_words_parts(369) == ("триста шестьдесят девять", "00")
+    assert amount_to_words_parts(0) == ("", "00")
+    assert amount_to_words_parts(0.5) == ("ноль", "50")
+
+
+def test_calculate_vat_totals_uses_row_totals():
+    from utils import calculate_vat_totals
+
+    cargos = [
+        {"total_cost": "307.50", "vat_rate": "20%", "vat_cost": "61.50",
+         "total_with_vat": "369.00"},
+        {"total_cost": 100, "vat_rate": "Без НДС", "vat_cost": 0,
+         "total_with_vat": 100},
+    ]
+    assert calculate_vat_totals(cargos) == (407.5, 61.5, 469.0)
+
+
+def test_calculate_vat_totals_falls_back_to_qty_and_price():
+    from utils import calculate_vat_totals
+
+    cargos = [{"cargo_qty": "10", "price": "100", "vat_rate": "20%"}]
+    assert calculate_vat_totals(cargos) == (1000.0, 200.0, 1200.0)
+
+
+def _cargo_row(doc, name):
+    for table in doc.tables:
+        for row in table.rows:
+            values = [cell.text.strip() for cell in row.cells]
+            if name in values:
+                return values
+    raise AssertionError(f"Строка груза {name!r} не найдена")
+
+
+def _total_row(doc, first_words):
+    for table in doc.tables:
+        for row in table.rows:
+            values = [cell.text.strip() for cell in row.cells]
+            if values and values[0] == first_words:
+                return values
+    raise AssertionError(f"Строка итогов {first_words!r} не найдена")
+
+
+def test_word_cargo_columns_and_vat_totals():
+    import word_filler
+    from utils import amount_to_words_parts
+
+    cargo = {
+        "cargo_name": "Pesok",
+        "unit": "тн",
+        "quantity": "11",
+        "cargo_qty": "20.5",
+        "places": "11",
+        "price": "15",
+        "total_cost": "307.50",
+        "vat_rate": "20%",
+        "vat_cost": "61.50",
+        "total_with_vat": "369.00",
+    }
+    vat_text, vat_cents = amount_to_words_parts(61.5)
+    total_text, total_cents = amount_to_words_parts(369)
+    data = {
+        "waybill_number": "TEST",
+        "day": "22", "month": "10", "year": "26",
+        "car_model": "MAZ", "car_plate": "AA", "trailer_info": "-",
+        "driver_name": "Ivanov", "loading_point": "A", "unloading_point": "B",
+        "total_vat_text": vat_text,
+        "total_vat_cents": vat_cents,
+        "total_with_vat_text": total_text,
+        "total_with_vat_cents": total_cents,
+        "cargos": [cargo],
+    }
+
+    path, _, _ = word_filler.fill_documents(data, "pytest_ttn")
+    doc = Document(path)
+
+    row = _cargo_row(doc, "Pesok")
+    assert row[0] == "Pesok"
+    assert row[1] == "тн"
+    assert row[2] == "11"
+    assert all("{{cargo." not in value for value in row)
+
+    vat_row = _total_row(doc, "шестьдесят один")
+    assert vat_row[:3] == ["шестьдесят один"] * 3
+    assert vat_row[3] == "50"
+
+    total_row = _total_row(doc, "триста шестьдесят девять")
+    assert total_row[:3] == ["триста шестьдесят девять"] * 3
+    assert total_row[3] == "00"
+
+    for table in doc.tables:
+        for r in table.rows:
+            for cell in r.cells:
+                assert "{{cargo." not in cell.text
+
+
+def test_word_supports_legacy_si_and_unit_values():
+    import word_filler
+
+    cargo = {
+        "cargo_name": "Pesok",
+        "si": "тн",
+        "unit": "11",
+        "cargo_qty": "20.5",
+        "places": "11",
+    }
+    path, _, _ = word_filler.fill_documents(
+        {"waybill_number": "TEST2", "cargos": [cargo]}, "pytest_ttn_legacy")
+    doc = Document(path)
+    row = _cargo_row(doc, "Pesok")
+    assert row[1] == "тн"
+    assert row[2] == "11"

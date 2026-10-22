@@ -1,0 +1,40 @@
+# Секреты и локальная конфигурация
+.env
+.env.*
+!.env.example
+
+# Рабочие базы и данные
+*.db
+*.db-wal
+*.db-shm
+data/
+masters.json
+last_orders.json
+backup/
+acts.db
+
+# Шаблоны и результаты, которые могут содержать реальные данные
+Шаблоны/
+Результат/
+Результаты/
+Путевые/
+
+# Виртуальные окружения и кэши
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE и ОС
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Логи и временные файлы
+*.log
+tmp/
+temp/
