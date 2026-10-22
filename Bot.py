@@ -56,19 +56,20 @@ admin_menu.register(bot, MASTERS, save_masters, YOUR_TELEGRAM_ID)
 import time
 import requests
 
-print("Бот запущен. Нажмите Ctrl+C для остановки.")
+if __name__ == "__main__":
+    print("Бот запущен. Нажмите Ctrl+C для остановки.")
 
-while True:
-    try:
-        bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
-    except requests.exceptions.ConnectionError as e:
-        print(f"⚠️ Потеря связи с Telegram: {e}")
-        print("⏳ Переподключение через 10 секунд...")
-        time.sleep(10)
-    except requests.exceptions.ReadTimeout:
-        print("⚠️ Таймаут чтения. Переподключение через 5 секунд...")
-        time.sleep(5)
-    except Exception as e:
-        print(f"⚠️ Неожиданная ошибка: {e}")
-        print("⏳ Перезапуск через 10 секунд...")
-        time.sleep(10)
+    while True:
+        try:
+            bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
+        except requests.exceptions.ConnectionError as e:
+            print(f"⚠️ Потеря связи с Telegram: {e}")
+            print("⏳ Переподключение через 10 секунд...")
+            time.sleep(10)
+        except requests.exceptions.ReadTimeout:
+            print("⚠️ Таймаут чтения. Переподключение через 5 секунд...")
+            time.sleep(5)
+        except Exception as e:
+            print(f"⚠️ Неожиданная ошибка: {e}")
+            print("⏳ Перезапуск через 10 секунд...")
+            time.sleep(10)
