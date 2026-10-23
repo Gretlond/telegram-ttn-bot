@@ -42,6 +42,57 @@ def clean_driver_name(name):
         name = name[len('водитель'):].strip()
     return name
 
+
+def _replace_placeholders(paragraph, data):
+    """Заменяет {{ключи}} в абзаце, не разрушая табуляцию и форматирование.
+
+    Placeholder может быть разбит на несколько run'ов. Поэтому работаем
+    с текстовыми XML-узлами w:t, а не с paragraph.text: так сохраняются
+    элементы w:tab (они нужны для позиционирования полей на бланке).
+    """
+    nodes = paragraph._p.xpath('.//w:t')
+    if not nodes:
+        return
+
+    for key, value in data.items():
+        if key == 'cargos':
+            continue
+        placeholder = "{{" + key + "}}"
+        replacement = str(value)
+
+        while True:
+            texts = [node.text or '' for node in nodes]
+            full = ''.join(texts)
+            start = full.find(placeholder)
+            if start < 0:
+                break
+            end = start + len(placeholder)
+
+            affected = []
+            pos = 0
+            for node in nodes:
+                text = node.text or ''
+                nstart, nend = pos, pos + len(text)
+                if nend > start and nstart < end:
+                    local_start = max(start, nstart) - nstart
+                    local_end = min(end, nend) - nstart
+                    affected.append((node, text, local_start, local_end))
+                pos = nend
+
+            if not affected:
+                break
+
+            first_node, first_text, first_start, first_end = affected[0]
+            if len(affected) == 1:
+                first_node.text = (
+                    first_text[:first_start] + replacement + first_text[first_end:]
+                )
+            else:
+                first_node.text = first_text[:first_start] + replacement
+                for node, text, _, local_end in affected[1:]:
+                    node.text = text[local_end:]
+
+
 def fill_documents(data, output_name):
     if not os.path.exists(RESULT_FOLDER):
         os.makedirs(RESULT_FOLDER)
@@ -90,18 +141,21 @@ def fill_documents(data, output_name):
     cargos = data.get('cargos', [])
     cargo_table_processed = False
 
+    for paragraph in doc.paragraphs:
+        _replace_placeholders(paragraph, data)
+
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
-                    for key, val in data.items():
-                        if key == 'cargos': continue
-                        placeholder = "{{" + key + "}}"
-                        if placeholder in p.text:
-                            p.text = p.text.replace(placeholder, str(val))
-                            if key in ('total_vat_cents', 'total_with_vat_cents'):
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                p.text = p.text.strip()
+                    is_cents = any(
+                        "{{" + key + "}}" in p.text
+                        for key in ('total_vat_cents', 'total_with_vat_cents')
+                    )
+                    _replace_placeholders(p, data)
+                    if is_cents:
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p.text = p.text.strip()
 
         if not cargo_table_processed:
             cargo_row = None
@@ -157,10 +211,8 @@ def fill_documents(data, output_name):
                             p.paragraph_format.space_before = Pt(0)
                             p.paragraph_format.space_after = Pt(0)
                             p.paragraph_format.line_spacing = 1.0
-                            for key, val in cargo_values.items():
-                                placeholder = "{{cargo." + key + "}}"
-                                if placeholder in p.text:
-                                    p.text = p.text.replace(placeholder, str(val))
+                            _replace_placeholders(
+                                p, {f"cargo.{k}": v for k, v in cargo_values.items()})
                             if len(cargos) > 5:
                                 font_sz = Pt(7) if len(cargos) > 8 else Pt(8)
                                 for r in p.runs:

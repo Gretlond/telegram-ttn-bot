@@ -127,6 +127,39 @@ def test_word_keeps_cents_blank_without_calculation():
     assert "00" not in cells
 
 
+def test_word_header_uses_tabs_and_fills_body_paragraphs():
+    import word_filler
+    from docx import Document
+
+    path, _, _ = word_filler.fill_documents(
+        {"day": "22", "month": "10", "year": "26",
+         "car_model": "MAZ", "car_plate": "AA", "waybill_number": "123456"},
+        "pytest_ttn_header")
+
+    doc = Document(path)
+    header_paragraphs = [p for p in doc.paragraphs if "\t" in p.text]
+    assert header_paragraphs
+    assert any("22" in p.text and "октября" in p.text and "26" in p.text
+               for p in header_paragraphs)
+    assert all("{{" not in p.text for p in doc.paragraphs)
+
+
+def test_replace_placeholders_keeps_tab_elements():
+    import word_filler
+    from docx import Document
+
+    doc = Document()
+    paragraph = doc.add_paragraph()
+    first = paragraph.add_run()
+    first.add_tab()
+    paragraph.add_run("{{value}}")
+
+    word_filler._replace_placeholders(paragraph, {"value": "42"})
+
+    assert paragraph._p.xpath(".//w:tab")
+    assert paragraph.text.replace("\t", "") == "42"
+
+
 def test_word_supports_legacy_si_and_unit_values():
     import word_filler
 
