@@ -7,7 +7,7 @@ def test_money_to_words_parts():
     assert amount_to_words_parts(350.40) == ("триста пятьдесят", "40")
     assert amount_to_words_parts(61.5) == ("шестьдесят один", "50")
     assert amount_to_words_parts(369) == ("триста шестьдесят девять", "00")
-    assert amount_to_words_parts(0) == ("", "00")
+    assert amount_to_words_parts(0) == ("", "")
     assert amount_to_words_parts(0.5) == ("ноль", "50")
 
 
@@ -99,6 +99,32 @@ def test_word_cargo_columns_and_vat_totals():
         for r in table.rows:
             for cell in r.cells:
                 assert "{{cargo." not in cell.text
+
+
+def test_word_keeps_cents_blank_without_calculation():
+    import word_filler
+    from utils import amount_to_words_parts
+
+    assert amount_to_words_parts(0) == ("", "")
+
+    cargo = {
+        "cargo_name": "Pesok",
+        "si": "тн",
+        "unit": "20",
+        "cargo_qty": "20",
+    }
+    path, _, _ = word_filler.fill_documents(
+        {"waybill_number": "TEST-NO-COST", "cargos": [cargo]},
+        "pytest_ttn_no_cost")
+    doc = Document(path)
+
+    cells = [
+        cell.text.strip()
+        for table in doc.tables
+        for row in table.rows
+        for cell in row.cells
+    ]
+    assert "00" not in cells
 
 
 def test_word_supports_legacy_si_and_unit_values():

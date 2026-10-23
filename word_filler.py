@@ -58,12 +58,21 @@ def fill_documents(data, output_name):
         'release_allowed_by': RELEASE_ALLOWED_BY,
         'shipper_handed_by': '', 'consignee_received_by': '',
         'total_mass_text': '', 'total_places_text': '',
-        'total_vat_text': '', 'total_vat_cents': '00',
-        'total_with_vat_text': '', 'total_with_vat_cents': '00',
+        'total_vat_text': '', 'total_vat_cents': '',
+        'total_with_vat_text': '', 'total_with_vat_cents': '',
         'shipper_unp': '', 'consignee_unp': '', 'customer_unp': ''
     }
     for key, value in defaults.items():
         data.setdefault(key, value)
+
+    # В старых заявках и шаблонах копейки могли оставаться "00" даже без
+    # рассчитанной суммы. Если суммы прописью нет, поле копеек делаем пустым.
+    for text_key, cents_key in (
+        ('total_vat_text', 'total_vat_cents'),
+        ('total_with_vat_text', 'total_with_vat_cents'),
+    ):
+        if not str(data.get(text_key) or '').strip():
+            data[cents_key] = ''
 
     data['month'] = month_to_text(data.get('month', ''))
     driver_clean = clean_driver_name(data.get('driver_name', ''))
