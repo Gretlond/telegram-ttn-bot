@@ -193,7 +193,7 @@ def fill_documents(data, output_name):
                         cargo_values['unit'] = cargo.get('quantity', '')
 
                     new_row = _Row(new_tr, table)
-                    for cell in new_row.cells:
+                    for col_idx, cell in enumerate(new_row.cells):
                         tcPr = cell._tc.get_or_add_tcPr()
                         tcMar = tcPr.find(qn('w:tcMar'))
                         if tcMar is None:
@@ -208,6 +208,8 @@ def fill_documents(data, output_name):
                             node.set(qn('w:type'), 'dxa')
 
                         for p in cell.paragraphs:
+                            p.alignment = (WD_ALIGN_PARAGRAPH.LEFT if col_idx == 0
+                                           else WD_ALIGN_PARAGRAPH.CENTER)
                             p.paragraph_format.space_before = Pt(0)
                             p.paragraph_format.space_after = Pt(0)
                             p.paragraph_format.line_spacing = 1.0
