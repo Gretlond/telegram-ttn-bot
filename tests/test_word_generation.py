@@ -127,21 +127,34 @@ def test_word_keeps_cents_blank_without_calculation():
     assert "00" not in cells
 
 
-def test_word_header_uses_tabs_and_fills_body_paragraphs():
+def test_word_header_fills_date_and_keeps_unloading_separate():
     import word_filler
     from docx import Document
 
     path, _, _ = word_filler.fill_documents(
         {"day": "22", "month": "10", "year": "26",
-         "car_model": "MAZ", "car_plate": "AA", "waybill_number": "123456"},
+         "car_model": "MAZ", "car_plate": "AA", "waybill_number": "123456",
+         "release_basis": "RELEASE", "loading_point": "LOAD",
+         "unloading_point": "UNLOAD"},
         "pytest_ttn_header")
 
     doc = Document(path)
-    header_paragraphs = [p for p in doc.paragraphs if "\t" in p.text]
-    assert header_paragraphs
-    assert any("22" in p.text and "октября" in p.text and "26" in p.text
-               for p in header_paragraphs)
-    assert all("{{" not in p.text for p in doc.paragraphs)
+    rows = [
+        [cell.text.strip() for cell in row.cells]
+        for table in doc.tables
+        for row in table.rows
+    ]
+    release_index = next(i for i, values in enumerate(rows) if "RELEASE" in values)
+    loading_index = next(i for i, values in enumerate(rows) if "LOAD" in values)
+    unloading_index = next(i for i, values in enumerate(rows) if "UNLOAD" in values)
+
+    assert release_index == loading_index
+    assert "UNLOAD" not in rows[release_index]
+    assert unloading_index == release_index + 1
+
+    text = "\n".join(cell.text for table in doc.tables for row in table.rows for cell in row.cells)
+    assert "22" in text and "октября" in text and "26" in text
+    assert "{{" not in text
 
 
 def test_replace_placeholders_keeps_tab_elements():

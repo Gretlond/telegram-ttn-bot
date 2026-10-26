@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
 
@@ -30,3 +31,27 @@ def test_demo_template_keeps_totals_on_second_page():
     p_pr = previous.find(qn("w:pPr"))
     assert p_pr is not None
     assert p_pr.find(qn("w:pageBreakBefore")) is not None
+
+
+def test_demo_cargo_table_fits_content_width_and_centers_values():
+    template = Path(__file__).resolve().parents[1] / "assets" / "Шаблон_ТТН_демо.docx"
+    doc = Document(template)
+    section = doc.sections[0]
+    content_width = section.page_width - section.left_margin - section.right_margin
+
+    table = next(
+        table
+        for table in doc.tables
+        if any("{{cargo.cargo_name}}" in cell.text for row in table.rows for cell in row.cells)
+    )
+    cargo_row = next(
+        row for row in table.rows
+        if any("{{cargo.cargo_name}}" in cell.text for cell in row.cells)
+    )
+
+    assert abs(sum(column.width for column in table.columns) - content_width) < 10000
+    assert table._tbl.tblPr.find(qn("w:tblInd")).get(qn("w:w")) == "0"
+
+    alignments = [cell.paragraphs[0].alignment for cell in cargo_row.cells]
+    assert alignments[0] == WD_ALIGN_PARAGRAPH.LEFT
+    assert all(alignment == WD_ALIGN_PARAGRAPH.CENTER for alignment in alignments[1:])
