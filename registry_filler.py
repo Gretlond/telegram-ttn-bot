@@ -4,6 +4,7 @@
 import os
 from docx import Document
 from docx.shared import Pt, Cm, Mm
+from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
@@ -159,6 +160,11 @@ def generate_registry_docx(orders, master_name, output_name, manual_entries=None
     doc = Document()
 
     for section in doc.sections:
+        # Word's default python-docx template is Letter (21.59 × 27.94 cm).
+        # The registry is printed on A4, so set the paper size explicitly.
+        section.page_width = Mm(210)
+        section.page_height = Mm(297)
+        section.orientation = WD_ORIENT.PORTRAIT
         section.left_margin = Cm(0.7)
         section.right_margin = Cm(0.7)
         section.top_margin = Cm(0.8)
