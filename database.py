@@ -97,6 +97,15 @@ _DEFAULT_PLATFORM_CARGOS = {
     "p_4": {"name": "Бытовка", "category": "cat_2"},
 }
 
+# Постоянные реквизиты верхней части ТТН. Значения задаются в кабинете
+# администратора и применяются ко всем новым документам.
+TTN_HEADER_FIELDS = (
+    "shipper", "shipper_unp",
+    "consignee", "consignee_unp",
+    "customer", "customer_unp",
+)
+_DEFAULT_TTN_HEADER = {}
+
 CARS = {}
 DRIVERS = {}
 TRAILERS = {}
@@ -107,6 +116,7 @@ CARGO_DISTANCES = {}
 UNITS = {}
 PLATFORM_CARGOS = {}
 PLATFORM_CATEGORIES = {}
+TTN_HEADER = {}
 
 def _ensure_file(name, default):
     ensure_data_dir()
@@ -157,6 +167,7 @@ def reload_all():
     UNITS.clear();           UNITS.update(load_json("units", _DEFAULT_UNITS))
     PLATFORM_CATEGORIES.clear(); PLATFORM_CATEGORIES.update(load_json("platform_categories", _DEFAULT_PLATFORM_CATEGORIES))
     PLATFORM_CARGOS.clear(); PLATFORM_CARGOS.update(load_json("platform_cargos", _DEFAULT_PLATFORM_CARGOS))
+    TTN_HEADER.clear();    TTN_HEADER.update(load_json("ttn_header", _DEFAULT_TTN_HEADER))
     _migrate_drivers_companies()
     _migrate_cars_type()
     _migrate_platform_cargos()
@@ -171,6 +182,16 @@ def save_cargo_distances():return save_json("cargo_distances", dict(CARGO_DISTAN
 def save_units():          return save_json("units", dict(UNITS))
 def save_platform_cargos():return save_json("platform_cargos", dict(PLATFORM_CARGOS))
 def save_platform_categories(): return save_json("platform_categories", dict(PLATFORM_CATEGORIES))
+def save_ttn_header():    return save_json("ttn_header", dict(TTN_HEADER))
+
+def update_ttn_header(**fields):
+    """Сохраняет постоянные реквизиты ТТН, введённые администратором."""
+    allowed = set(TTN_HEADER_FIELDS)
+    if any(key not in allowed for key in fields):
+        return False
+    for key, value in fields.items():
+        TTN_HEADER[key] = str(value or "").strip()
+    save_ttn_header(); return True
 
 def init_storage():
     for name, default in [
@@ -180,6 +201,7 @@ def init_storage():
         ("cargo_distances", _DEFAULT_CARGO_DISTANCES), ("units", _DEFAULT_UNITS),
         ("platform_categories", _DEFAULT_PLATFORM_CATEGORIES),
         ("platform_cargos", _DEFAULT_PLATFORM_CARGOS),
+        ("ttn_header", _DEFAULT_TTN_HEADER),
     ]:
         _ensure_file(name, default)
     reload_all()

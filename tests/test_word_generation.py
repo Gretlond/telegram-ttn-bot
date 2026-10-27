@@ -208,3 +208,36 @@ def test_trailer_info_prints_only_plate_number():
         cell.text for table in doc.tables for row in table.rows for cell in row.cells)
     assert "АК 5678-9" in text
     assert "ГКБ 8352" not in text
+
+
+def test_ttn_header_settings_are_used_in_document(monkeypatch):
+    import database
+    import word_filler
+
+    monkeypatch.setattr(database, "TTN_HEADER", {
+        "shipper": "ОАО «Тест-Отправитель»",
+        "shipper_unp": "111111111",
+        "consignee": "ОАО «Тест-Получатель»",
+        "consignee_unp": "222222222",
+        "customer": "ОАО «Тест-Заказчик»",
+        "customer_unp": "333333333",
+    })
+
+    path, _, _ = word_filler.fill_documents(
+        {"waybill_number": "TEST-HEADER"}, "pytest_ttn_header")
+    doc = Document(path)
+
+    top = doc.tables[0]
+    assert len(top.rows) == 2
+    assert [cell.text for cell in top.rows[0].cells] == [
+        "", "Грузоотправитель", "Грузополучатель",
+        "Заказчик автомобильной перевозки (плательщик)",
+    ]
+    assert [cell.text for cell in top.rows[1].cells] == [
+        "УНП", "111111111", "222222222", "333333333",
+    ]
+
+    body = doc.tables[1]
+    assert body.rows[4].cells[0].text == "ОАО «Тест-Заказчик»"
+    assert body.rows[5].cells[0].text == "ОАО «Тест-Отправитель»"
+    assert body.rows[6].cells[0].text == "ОАО «Тест-Получатель»"

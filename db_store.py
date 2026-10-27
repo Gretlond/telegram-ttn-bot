@@ -17,6 +17,7 @@ FILES = {
     "units": "units.json",
     "platform_cargos": "platform_cargos.json",
     "platform_categories": "platform_categories.json",
+    "ttn_header": "ttn_header.json",
 }
 
 def ensure_data_dir():

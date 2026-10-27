@@ -45,6 +45,46 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         c = database.PLATFORM_CATEGORIES.get(cat_id)
         return f"{c.get('icon', '📦')} {c.get('name', '—')}" if c else "—"
 
+    TTN_HEADER_UI = (
+        ("shipper", "Грузоотправитель", "наименование и адрес"),
+        ("shipper_unp", "УНП грузоотправителя", "УНП"),
+        ("consignee", "Грузополучатель", "наименование и адрес"),
+        ("consignee_unp", "УНП грузополучателя", "УНП"),
+        ("customer", "Заказчик автомобильной перевозки", "наименование и адрес"),
+        ("customer_unp", "УНП заказчика", "УНП"),
+    )
+
+    def ttn_header_ui(field):
+        for key, label, hint in TTN_HEADER_UI:
+            if key == field:
+                return label, hint
+        return None, None
+
+    def show_ttn_header(uid, msg_id=None):
+        lines = [
+            "📋 Постоянные реквизиты ТТН",
+            "",
+            "Эти данные сохраняются и подставляются во все новые ТТН.",
+            "Чтобы изменить значение, нажмите кнопку ниже.",
+            "",
+        ]
+        m = types.InlineKeyboardMarkup(row_width=1)
+        for key, label, hint in TTN_HEADER_UI:
+            value = str(database.TTN_HEADER.get(key) or "").strip() or "—"
+            lines.append(f"{label}: {value}")
+            m.add(types.InlineKeyboardButton(
+                f"✏️ {label}", callback_data=f"adm_ttn_edit|{key}"))
+        m.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="adm_menu"))
+        text = "\n".join(lines)
+        if msg_id:
+            try:
+                bot.edit_message_text(chat_id=uid, message_id=msg_id, text=text,
+                                      reply_markup=m)
+                return
+            except Exception:
+                pass
+        bot.send_message(uid, text, reply_markup=m)
+
     def item_title(t, item_id, item):
         if t == 'drv':
             car = database.CARS.get(item.get('car_id', ''))
@@ -91,6 +131,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         m.add(
             types.InlineKeyboardButton("🚜 Грузы площадок", callback_data="adm_list_plat"),
         )
+        m.add(types.InlineKeyboardButton("📋 Реквизиты ТТН", callback_data="adm_ttn_header"))
         m.add(types.InlineKeyboardButton("🕘 Аудит заявок", callback_data="adm_audit"))
         m.add(types.InlineKeyboardButton("⬅️ В кабинет", callback_data="master_back"))
         return m
@@ -112,6 +153,60 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         if not check(call): return
         bot.answer_callback_query(call.id)
         show_main(call.message.chat.id, call.message.message_id)
+
+    @bot.callback_query_handler(func=lambda c: c.data == 'adm_ttn_header')
+    def cb_adm_ttn_header(call):
+        if not check(call): return
+        bot.answer_callback_query(call.id)
+        show_ttn_header(call.message.chat.id, call.message.message_id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith('adm_ttn_edit|'))
+    def cb_adm_ttn_edit(call):
+        if not check(call): return
+        field = call.data.split('|', 1)[1]
+        label, hint = ttn_header_ui(field)
+        if not label:
+            bot.answer_callback_query(call.id, "Ошибка поля."); return
+        uid = call.message.chat.id
+        state[uid] = {'action': 'ttn_header_edit', 'field': field}
+        bot.answer_callback_query(call.id)
+        bot.send_message(
+            uid,
+            f"✏️ {label}\n\nВведите {hint}.\n"
+            "Чтобы очистить значение, отправьте «-».\n\n_Отмена: /cancel_",
+            parse_mode='Markdown',
+        )
+
+    @bot.message_handler(
+        func=lambda m: state.get(m.chat.id, {}).get('action') == 'ttn_header_edit')
+    def process_ttn_header_edit(message):
+        uid = message.chat.id
+        st = state.get(uid)
+        if not st:
+            return
+        text = (message.text or '').strip()
+        if text.lower() in ('/cancel', 'отмена'):
+            state.pop(uid, None)
+            bot.send_message(uid, "❌ Отменено.")
+            show_main(uid)
+            return
+        field = st.get('field')
+        label, _ = ttn_header_ui(field)
+        if not label:
+            state.pop(uid, None)
+            bot.send_message(uid, "❌ Поле не найдено.")
+            show_main(uid)
+            return
+        value = "" if text == '-' else text
+        if field.endswith('_unp'):
+            value = value.replace(' ', '')
+        if not value and text != '-':
+            bot.send_message(uid, "❌ Значение не может быть пустым. Отправьте «-», чтобы очистить.")
+            return
+        database.update_ttn_header(**{field: value})
+        state.pop(uid, None)
+        bot.send_message(uid, f"✅ Сохранено: {label}")
+        show_ttn_header(uid)
 
     # =========================================================
     # АУДИТ И УДАЛЁННЫЕ ЗАЯВКИ

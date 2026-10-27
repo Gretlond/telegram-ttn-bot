@@ -61,6 +61,18 @@ def clean_trailer_info(value):
     return text
 
 
+def _ttn_header_values():
+    """Постоянные реквизиты шапки ТТН из кабинета администратора."""
+    try:
+        import database
+        return {
+            key: str(database.TTN_HEADER.get(key) or '').strip()
+            for key in database.TTN_HEADER_FIELDS
+        }
+    except Exception:
+        return {}
+
+
 def _replace_placeholders(paragraph, data):
     """Заменяет {{ключи}} в абзаце, не разрушая табуляцию и форматирование.
 
@@ -131,6 +143,14 @@ def fill_documents(data, output_name):
         'total_with_vat_text': '', 'total_with_vat_cents': '',
         'shipper_unp': '', 'consignee_unp': '', 'customer_unp': ''
     }
+    ttn_header = _ttn_header_values()
+    for key in ('customer', 'shipper', 'consignee'):
+        if ttn_header.get(key):
+            defaults[key] = ttn_header[key]
+    for key in ('customer_unp', 'shipper_unp', 'consignee_unp'):
+        if ttn_header.get(key):
+            defaults[key] = ttn_header[key]
+
     for key, value in defaults.items():
         data.setdefault(key, value)
 

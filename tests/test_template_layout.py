@@ -117,3 +117,26 @@ def test_demo_shipper_names_sit_above_preprinted_signature_lines():
     # подпись сдающего чуть выше, принимающего — чуть ниже.
     assert by_key["shipper"].paragraph_format.space_before == pytest.approx(Pt(19), abs=1000)
     assert by_key["consignee"].paragraph_format.space_before == pytest.approx(Pt(37), abs=1000)
+
+
+def test_demo_top_header_table_has_role_labels_and_unp_fields():
+    template = Path(__file__).resolve().parents[1] / "assets" / "Шаблон_ТТН_демо.docx"
+    doc = Document(template)
+
+    table = doc.tables[0]
+    assert len(table.rows) == 2
+    assert len(table.columns) == 4
+    assert [cell.text for cell in table.rows[0].cells] == [
+        "",
+        "Грузоотправитель",
+        "Грузополучатель",
+        "Заказчик автомобильной перевозки (плательщик)",
+    ]
+    assert [cell.text for cell in table.rows[1].cells] == [
+        "УНП",
+        "{{shipper_unp}}",
+        "{{consignee_unp}}",
+        "{{customer_unp}}",
+    ]
+    assert table._tbl.tblPr.find(qn("w:tblLayout")).get(qn("w:type")) == "fixed"
+
