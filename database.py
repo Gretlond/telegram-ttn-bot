@@ -222,10 +222,15 @@ def delete_car(car_id):
     if changed: save_drivers()
     save_cars(); return True
 
-def add_trailer(model, plate):
+def add_trailer(plate, model=""):
     tr_id = next_id("tr", TRAILERS)
     TRAILERS[tr_id] = {"model": model, "plate": plate}
     save_trailers(); return tr_id
+
+
+def trailer_number(trailer):
+    """Номер прицепа без марки — для списков и печатной формы."""
+    return (trailer.get("plate") or "").strip() or (trailer.get("model") or "").strip()
 
 def update_trailer(tr_id, **fields):
     if tr_id not in TRAILERS: return False

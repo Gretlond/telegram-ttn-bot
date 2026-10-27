@@ -54,7 +54,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
             ctype = "🚛" if item.get('type') == 'tipper' else "🚜"
             return f"{ctype} {item.get('model', '?')} ({item.get('plate', '?')}) • {item.get('capacity', '?')} т"
         if t == 'tr':
-            return f"{item.get('model', '?')} ({item.get('plate', '?')})"
+            return database.trailer_number(item)
         if t == 'loc':
             return f"{item.get('name', '?')} — {item.get('master', '?')}"
         if t == 'comp':
@@ -312,9 +312,8 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
                                              callback_data=f"adm_editfld|car|{item_id}|capacity"))
             m.add(types.InlineKeyboardButton("⚙️ Тип машины", callback_data=f"adm_editfld|car|{item_id}|type"))
         elif t == 'tr':
-            text = (f"🚚 *Прицеп*\n\nМарка: {item.get('model', '—')}\nГосномер: {item.get('plate', '—')}")
-            m.add(types.InlineKeyboardButton("✏️ Марка", callback_data=f"adm_editfld|tr|{item_id}|model"))
-            m.add(types.InlineKeyboardButton("✏️ Госномер", callback_data=f"adm_editfld|tr|{item_id}|plate"))
+            text = (f"🚚 *Прицеп*\n\nНомер: {database.trailer_number(item)}")
+            m.add(types.InlineKeyboardButton("✏️ Номер", callback_data=f"adm_editfld|tr|{item_id}|plate"))
         elif t == 'loc':
             text = (f"📍 *Объект*\n\nНазвание: {item.get('name', '—')}\nМастер: {item.get('master', '—')}")
             m.add(types.InlineKeyboardButton("✏️ Название", callback_data=f"adm_editfld|loc|{item_id}|name"))
@@ -389,7 +388,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
     ADD_PROMPTS = {
         'drv': ('add_drv_name', "👤 Введите ФИО водителя:"),
         'car': ('add_car_model', "🚛 Введите марку машины:"),
-        'tr': ('add_tr_model', "🚚 Введите марку прицепа:"),
+        'tr': ('add_tr_plate', "🚚 Введите номер прицепа:"),
         'loc': ('add_loc_name', "📍 Введите название объекта:"),
         'comp': ('add_comp_name', "🏢 Введите название предприятия:"),
         'ct': ('add_ct_name', "📦 Введите название материала:"),
@@ -471,18 +470,13 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
             bot.send_message(uid, "Выберите тип машины:", reply_markup=get_car_type_keyboard())
             return
 
-        if action == 'add_tr_model':
-            if len(text) < 2:
-                bot.send_message(uid, "❌ Введите марку:");
-                return
-            st['model'] = text
-            st['action'] = 'add_tr_plate'
-            bot.send_message(uid, "🔢 Введите госномер:");
-            return
         if action == 'add_tr_plate':
-            database.add_trailer(st['model'], text)
+            if len(text) < 3:
+                bot.send_message(uid, "❌ Слишком короткий номер:");
+                return
+            database.add_trailer(text)
             state.pop(uid, None)
-            bot.send_message(uid, f"✅ Прицеп добавлен: {st['model']} ({text})")
+            bot.send_message(uid, f"✅ Прицеп добавлен: {text}")
             render_list('tr', uid);
             return
 

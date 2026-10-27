@@ -15,7 +15,7 @@ from keyboards import (get_companies_keyboard, get_drivers_keyboard,
                        get_cargo_type_keyboard, get_cargo_subcategory_keyboard,
                        get_platform_categories_keyboard)
 from database import (COMPANIES, DRIVERS, CARS, TRAILERS, LOCATIONS,
-                      CARGO_TYPES)
+                      CARGO_TYPES, trailer_number)
 import orders_db
 from driver_order_ui import show_summary
 
@@ -265,11 +265,12 @@ def handle_trailer_selection(call):
     if tr_id not in TRAILERS:
         bot.answer_callback_query(call.id, "Ошибка"); return
     trailer = TRAILERS[tr_id]
-    user_data[user_id]['trailer_info'] = f"{trailer['model']} ({trailer['plate']})"
+    trailer_no = trailer_number(trailer)
+    user_data[user_id]['trailer_info'] = trailer_no
     if user_data[user_id].get('editing'):
         show_summary(user_id); return
     safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
-                           text=f"✅ {trailer['model']} ({trailer['plate']})\n\n"
+                           text=f"✅ {trailer_no}\n\n"
                                 f"Введите номер путевого листа:")
     bot.register_next_step_handler_by_chat_id(user_id, get_waybill_number)
 

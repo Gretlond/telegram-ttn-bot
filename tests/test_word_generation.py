@@ -189,3 +189,22 @@ def test_word_supports_legacy_si_and_unit_values():
     row = _cargo_row(doc, "Pesok")
     assert row[1] == "тн"
     assert row[2] == "11"
+
+
+def test_trailer_info_prints_only_plate_number():
+    import word_filler
+
+    assert word_filler.clean_trailer_info("ГКБ 8352 (АК 5678-9)") == "АК 5678-9"
+    assert word_filler.clean_trailer_info("А 8584 B-4 (А 8584 B-4)") == "А 8584 B-4"
+    assert word_filler.clean_trailer_info("АК 5678-9") == "АК 5678-9"
+    assert word_filler.clean_trailer_info("-") == "-"
+
+    path, _, _ = word_filler.fill_documents(
+        {"waybill_number": "TEST-TRAILER",
+         "trailer_info": "ГКБ 8352 (АК 5678-9)"},
+        "pytest_ttn_trailer")
+    doc = Document(path)
+    text = "\n".join(
+        cell.text for table in doc.tables for row in table.rows for cell in row.cells)
+    assert "АК 5678-9" in text
+    assert "ГКБ 8352" not in text

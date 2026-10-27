@@ -4,7 +4,7 @@
 from telebot import types
 from database import (CARS, DRIVERS, TRAILERS, LOCATIONS, COMPANIES,
                       CARGO_TYPES, CARGO_DISTANCES, UNITS,
-                      PLATFORM_CARGOS, PLATFORM_CATEGORIES)
+                      PLATFORM_CARGOS, PLATFORM_CATEGORIES, trailer_number)
 
 def get_main_keyboard():
     m = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -103,7 +103,7 @@ def get_trailer_keyboard():
     m = types.InlineKeyboardMarkup(row_width=1)
     m.add(types.InlineKeyboardButton("🚫 Без прицепа", callback_data="trailer_none"))
     for tr_id, tr_info in TRAILERS.items():
-        m.add(types.InlineKeyboardButton(f"{tr_info['model']} ({tr_info['plate']})", callback_data=f"select_trailer_{tr_id}"))
+        m.add(types.InlineKeyboardButton(trailer_number(tr_info), callback_data=f"select_trailer_{tr_id}"))
     m.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back_cars"))
     return m
 

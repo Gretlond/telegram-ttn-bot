@@ -267,3 +267,45 @@ def test_edit_cargo_handlers_survive_non_text(bot_calls, summary_module):
 
     m.save_edit_cargo_mass(make_message(uid, None))
     assert bot_calls.by_message[-1][1] is m.save_edit_cargo_mass
+
+
+def test_trailer_keyboard_shows_only_number():
+    from database import TRAILERS
+    from keyboards import get_trailer_keyboard
+
+    keyboard = get_trailer_keyboard()
+    labels = [button.text for row in keyboard.keyboard for button in row]
+
+    for trailer in TRAILERS.values():
+        assert trailer["plate"] in labels
+        assert f"{trailer['model']} ({trailer['plate']})" not in labels
+
+
+def test_trailer_selection_saves_only_number(bot_calls, start_module):
+    from database import TRAILERS
+
+    uid = 112
+    tr_id, trailer = next(iter(TRAILERS.items()))
+    start_module.user_data[uid] = {}
+
+    start_module.handle_trailer_selection(
+        make_callback(uid, f"select_trailer_{tr_id}")
+    )
+
+    assert start_module.user_data[uid]["trailer_info"] == trailer["plate"]
+    assert trailer["plate"] in bot_calls.edits[-1]["text"]
+    assert trailer["model"] not in bot_calls.edits[-1]["text"]
+    assert bot_calls.by_chat[-1] == (uid, start_module.get_waybill_number)
+
+
+def test_new_trailer_registration_asks_only_for_number(bot_calls):
+    import driver_reg
+
+    uid = 113
+    driver_reg.user_data[uid] = {"reg_driver": {"name": "Тестовый водитель"}}
+
+    driver_reg.reg_driver_trailer_new(make_callback(uid, "reg_trailer_new"))
+
+    assert "номер" in bot_calls.edits[-1]["text"]
+    assert "марк" not in bot_calls.edits[-1]["text"].lower()
+    assert bot_calls.by_chat[-1] == (uid, driver_reg.reg_new_trailer_plate)

@@ -2,6 +2,7 @@
 # ЗАПОЛНЕНИЕ WORD И КОНВЕРТАЦИЯ В PDF (Финальная версия с выравниванием)
 # =============================================================
 import os
+import re
 import subprocess
 import shutil
 from docx import Document
@@ -41,6 +42,23 @@ def clean_driver_name(name):
     if name.lower().startswith('водитель'):
         name = name[len('водитель'):].strip()
     return name
+
+
+def clean_trailer_info(value):
+    """Оставляет в печатной форме только номер прицепа.
+
+    Раньше в заявках хранилось значение вида «марка (номер)»; в ТТН
+    печатаем номер из скобок, чтобы марка автомобиля не дублировалась.
+    """
+    text = str(value or '').strip()
+    if not text or text == '-':
+        return text or '-'
+    match = re.search(r'\(([^()]*)\)\s*$', text)
+    if match:
+        number = match.group(1).strip()
+        if number:
+            return number
+    return text
 
 
 def _replace_placeholders(paragraph, data):
@@ -115,6 +133,8 @@ def fill_documents(data, output_name):
     }
     for key, value in defaults.items():
         data.setdefault(key, value)
+
+    data['trailer_info'] = clean_trailer_info(data.get('trailer_info'))
 
     # В старых заявках и шаблонах копейки могли оставаться "00" даже без
     # рассчитанной суммы. Если суммы прописью нет, поле копеек делаем пустым.

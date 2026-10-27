@@ -221,7 +221,7 @@ def medit_field_router(call):
                                text="📅 Выберите дату:", reply_markup=m)
     elif field == 'trailer':
         safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
-                               text="🚚 Введите марку и номер прицепа (или «-»):\n\n_Отмена: /cancel_",
+                               text="🚚 Введите номер прицепа (или «-»):\n\n_Отмена: /cancel_",
                                parse_mode='Markdown', reply_markup=back)
         bot.register_next_step_handler_by_chat_id(user_id, save_medit_field)
     elif field == 'car':

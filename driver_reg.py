@@ -219,31 +219,12 @@ def reg_driver_trailer_new(call):
     try:
         bot.edit_message_text(
             chat_id=user_id, message_id=call.message.message_id,
-            text="🚚 *Новый прицеп*\n\nВведите *марку* "
-                 "(например: Пл-ка АРС 55443):\n\n_Отмена: /cancel_",
+            text="🚚 *Новый прицеп*\n\nВведите *номер* прицепа "
+                 "(например: АА 8760-4):\n\n_Отмена: /cancel_",
             parse_mode='Markdown')
     except Exception:
-        bot.send_message(user_id, "🚚 Введите марку прицепа:")
-    bot.register_next_step_handler_by_chat_id(user_id, reg_new_trailer_model)
-
-
-def reg_new_trailer_model(message):
-    user_id = message.chat.id
-    st = user_data.get(user_id, {}).get('reg_driver')
-    if not st or st.get('new_trailer') is None:
-        bot.send_message(user_id, "Сессия истекла."); return
-    text = (message.text or '').strip()
-    if text.lower() in ('/cancel', 'отмена'):
-        user_data[user_id].pop('reg_driver', None)
-        bot.send_message(user_id, "❌ Регистрация отменена.",
-                         reply_markup=get_main_keyboard()); return
-    if len(text) < 2:
-        bot.send_message(user_id, "❌ Слишком короткая марка (или /cancel):")
-        bot.register_next_step_handler(message, reg_new_trailer_model); return
-    st['new_trailer']['model'] = text
-    bot.send_message(user_id, "🔢 Введите *госномер* прицепа:\n\n_Отмена: /cancel_",
-                     parse_mode='Markdown')
-    bot.register_next_step_handler(message, reg_new_trailer_plate)
+        bot.send_message(user_id, "🚚 Введите номер прицепа:")
+    bot.register_next_step_handler_by_chat_id(user_id, reg_new_trailer_plate)
 
 
 def reg_new_trailer_plate(message):
@@ -296,8 +277,8 @@ def reg_driver_finish(user_id, message_id=None):
     else:
         car_str = "🚫 без машины"
 
-    if st.get('new_trailer') is not None and st['new_trailer'].get('model'):
-        trailer_str = f"🆕 {st['new_trailer']['model']} ({st['new_trailer']['plate']})"
+    if st.get('new_trailer') is not None and st['new_trailer'].get('plate'):
+        trailer_str = f"🆕 {st['new_trailer']['plate']}"
     else:
         trailer_str = "—"
 
@@ -340,8 +321,8 @@ def reg_driver_submit(call):
     else:
         car_str = "🚫 без машины"
 
-    if st.get('new_trailer') is not None and st['new_trailer'].get('model'):
-        trailer_str = f"🆕 *НОВЫЙ* {st['new_trailer']['model']} ({st['new_trailer']['plate']})"
+    if st.get('new_trailer') is not None and st['new_trailer'].get('plate'):
+        trailer_str = f"🆕 *НОВЫЙ* {st['new_trailer']['plate']}"
     else:
         trailer_str = "—"
 
@@ -398,9 +379,8 @@ def accept_driver_reg(call):
                              st['new_car']['plate'],
                              st['new_car']['capacity'])
             print(f"✅ Создана машина {car_id}")
-        if st.get('new_trailer') is not None and st['new_trailer'].get('model'):
-            tr_id = add_trailer(st['new_trailer']['model'],
-                                st['new_trailer']['plate'])
+        if st.get('new_trailer') is not None and st['new_trailer'].get('plate'):
+            tr_id = add_trailer(st['new_trailer']['plate'])
             print(f"✅ Создан прицеп {tr_id}")
         drv_id = add_driver(st['name'], car_id, st['company_id'])
         print(f"✅ Создан водитель {drv_id}")
