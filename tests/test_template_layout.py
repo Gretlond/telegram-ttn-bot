@@ -30,7 +30,25 @@ def test_demo_template_keeps_totals_on_second_page():
     assert previous.tag == qn("w:p")
     p_pr = previous.find(qn("w:pPr"))
     assert p_pr is not None
-    assert p_pr.find(qn("w:pageBreakBefore")) is not None
+    # Итоги начинаются на второй странице через разрыв раздела, чтобы у
+    # второй страницы был свой (меньший) верхний отступ.
+    assert p_pr.find(qn("w:sectPr")) is not None
+    assert len(doc.sections) == 2
+    assert doc.sections[1].top_margin < doc.sections[0].top_margin
+
+
+def test_demo_totals_rows_match_paper_form():
+    template = Path(__file__).resolve().parents[1] / "assets" / "Шаблон_ТТН_демо.docx"
+    doc = Document(template)
+    table = _totals_table(doc)
+
+    assert len(table.rows) == 5
+    shipper_row = next(
+        row
+        for row in table.rows
+        if any("shipper_handed_by" in cell.text for cell in row.cells)
+    )
+    assert any("consignee_received_by" in cell.text for cell in shipper_row.cells)
 
 
 def test_demo_cargo_table_fits_content_width_and_centers_values():
