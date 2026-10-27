@@ -106,5 +106,14 @@ def test_demo_shipper_names_sit_above_preprinted_signature_lines():
                     signature_paragraphs.append(paragraph)
 
     assert len(signature_paragraphs) == 2
+    by_key = {}
     for paragraph in signature_paragraphs:
-        assert paragraph.paragraph_format.space_before >= Pt(24)
+        if "shipper_handed_by" in paragraph.text:
+            by_key["shipper"] = paragraph
+        if "consignee_received_by" in paragraph.text:
+            by_key["consignee"] = paragraph
+
+    # На бланке строки «Сдал» и «Принял» разнесены по высоте:
+    # подпись сдающего чуть выше, принимающего — чуть ниже.
+    assert by_key["shipper"].paragraph_format.space_before == pytest.approx(Pt(19), abs=1000)
+    assert by_key["consignee"].paragraph_format.space_before == pytest.approx(Pt(37), abs=1000)
