@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
+from docx.shared import Mm, Pt
 
 
 def _totals_table(doc):
@@ -69,7 +71,40 @@ def test_demo_cargo_table_fits_content_width_and_centers_values():
 
     assert abs(sum(column.width for column in table.columns) - content_width) < 10000
     assert table._tbl.tblPr.find(qn("w:tblInd")).get(qn("w:w")) == "0"
+    assert table._tbl.tblPr.find(qn("w:tblLayout")).get(qn("w:type")) == "fixed"
+
+    # Границы колонок сняты с типографского бланка: наименование шире,
+    # «Ед. изм.» узкая, «Примечание» широкая. Иначе единица измерения
+    # уезжает в «Количество» и весь ряд сдвигается на колонку вправо.
+    expected_widths = [
+        68.36, 11.48, 14.28, 23.98, 27.55, 10.20,
+        22.70, 23.72, 18.88, 15.81, 27.04,
+    ]
+    actual_widths = [column.width.mm for column in table.columns]
+    assert actual_widths == pytest.approx(expected_widths, abs=0.1)
 
     alignments = [cell.paragraphs[0].alignment for cell in cargo_row.cells]
     assert alignments[0] == WD_ALIGN_PARAGRAPH.LEFT
     assert all(alignment == WD_ALIGN_PARAGRAPH.CENTER for alignment in alignments[1:])
+
+
+def test_demo_shipper_names_sit_above_preprinted_signature_lines():
+    template = Path(__file__).resolve().parents[1] / "assets" / "Шаблон_ТТН_демо.docx"
+    doc = Document(template)
+
+    assert doc.sections[1].top_margin == pytest.approx(Mm(9.0), abs=1000)
+
+    table = _totals_table(doc)
+    signature_paragraphs = []
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                if (
+                    "shipper_handed_by" in paragraph.text
+                    or "consignee_received_by" in paragraph.text
+                ):
+                    signature_paragraphs.append(paragraph)
+
+    assert len(signature_paragraphs) == 2
+    for paragraph in signature_paragraphs:
+        assert paragraph.paragraph_format.space_before >= Pt(24)
