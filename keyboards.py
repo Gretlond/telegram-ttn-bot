@@ -48,6 +48,15 @@ def get_platform_unit_keyboard():
         m.add(types.InlineKeyboardButton(unit_name, callback_data=f"p_unit::{unit_id}"))
     return m
 
+
+def get_platform_places_keyboard():
+    m = types.InlineKeyboardMarkup(row_width=2)
+    m.add(
+        types.InlineKeyboardButton("🔢 Ввести число", callback_data="p_places_num"),
+        types.InlineKeyboardButton("♻️ Навал", callback_data="p_places_nav"),
+    )
+    return m
+
 # --- Клавиатуры для площадок (Категории и Грузы) ---
 def get_platform_categories_keyboard():
     m = types.InlineKeyboardMarkup(row_width=1)

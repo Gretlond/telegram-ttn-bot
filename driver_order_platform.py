@@ -8,9 +8,15 @@ from utils import safe_edit_message_text
 from keyboards import (get_main_keyboard, get_platform_cargos_keyboard,
                        get_platform_categories_keyboard,
                        get_platform_unit_keyboard,
+                       get_platform_places_keyboard,
                        get_platform_new_cargo_category_keyboard)
 from database import PLATFORM_CATEGORIES, PLATFORM_CARGOS, UNITS
 from driver_order_ui import show_cargos_menu
+
+PLATFORM_MASS_PROMPT = (
+    "Введите *общую массу груза в тоннах* (например, 14.7):\n\n"
+    "_Отмена: /cancel_"
+)
 
 
 # =============================================================
@@ -159,27 +165,58 @@ def get_platform_cargo_qty(message):
         return
     user_data[user_id]['temp_qty'] = text
     bot.send_message(user_id,
-                     "Введите *количество грузовых мест* (число):\n\n_Отмена: /cancel_",
-                     parse_mode='Markdown')
+                     "Выберите *количество грузовых мест*:",
+                     parse_mode='Markdown',
+                     reply_markup=get_platform_places_keyboard())
+    # Пользователь может как нажать кнопку, так и сразу написать число.
     bot.register_next_step_handler_by_chat_id(user_id, get_platform_places)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'p_places_num')
+def handle_p_places_num(call):
+    user_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    bot.clear_step_handler_by_chat_id(user_id)
+    safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
+                           text="Введите *количество грузовых мест* (число):\n\n_Отмена: /cancel_",
+                           parse_mode='Markdown')
+    bot.register_next_step_handler_by_chat_id(user_id, get_platform_places)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'p_places_nav')
+def handle_p_places_nav(call):
+    user_id = call.message.chat.id
+    user_data.setdefault(user_id, {})['temp_places'] = 'нав.'
+    bot.answer_callback_query(call.id, "Навал")
+    bot.clear_step_handler_by_chat_id(user_id)
+    safe_edit_message_text(
+        chat_id=user_id, message_id=call.message.message_id,
+        text="Количество мест: *нав.* (навал)\n\n" + PLATFORM_MASS_PROMPT,
+        parse_mode='Markdown')
+    bot.register_next_step_handler_by_chat_id(user_id, get_platform_mass)
 
 
 def get_platform_places(message):
     user_id = message.chat.id
     text = (message.text or '').strip()
+    normalized = text.lower().replace('.', '').strip()
     if text.lower() in ('/cancel', 'отмена'):
         user_data[user_id] = {}
         bot.send_message(user_id, "❌ Отменено.", reply_markup=get_main_keyboard()); return
+    if normalized in ('нав', 'навал'):
+        user_data[user_id]['temp_places'] = 'нав.'
+        bot.send_message(user_id, PLATFORM_MASS_PROMPT, parse_mode='Markdown')
+        bot.register_next_step_handler_by_chat_id(user_id, get_platform_mass)
+        return
     try:
         int(text)
     except ValueError:
-        bot.send_message(user_id, "❌ Введите целое число (например, 11) или /cancel:")
+        bot.send_message(user_id,
+                         "❌ Введите целое число (например, 11), «навал» или /cancel:")
         bot.register_next_step_handler_by_chat_id(user_id, get_platform_places)
         return
     user_data[user_id]['temp_places'] = text
-    bot.send_message(user_id,
-                     "Введите *общую массу груза в тоннах* (например, 14.7):\n\n_Отмена: /cancel_",
-                     parse_mode='Markdown')
+    bot.send_message(user_id, PLATFORM_MASS_PROMPT, parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(user_id, get_platform_mass)
 
 

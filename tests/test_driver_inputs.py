@@ -7,6 +7,17 @@ def make_message(user_id, text):
     return SimpleNamespace(chat=SimpleNamespace(id=user_id), text=text)
 
 
+def make_callback(user_id, data):
+    return SimpleNamespace(
+        id="callback-id",
+        data=data,
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=user_id),
+            message_id=77,
+        ),
+    )
+
+
 @pytest.fixture
 def bot_calls(monkeypatch):
     """Перехватывает отправку сообщений и регистрацию next-step обработчиков."""
@@ -15,18 +26,30 @@ def bot_calls(monkeypatch):
     sent = []
     by_chat = []
     by_message = []
+    edits = []
+    answers = []
+    cleared = []
 
     def send_message(*args, **kwargs):
         sent.append((args, kwargs))
         return SimpleNamespace(message_id=1)
 
+    def edit_message_text(**kwargs):
+        edits.append(kwargs)
+
     monkeypatch.setattr(bot, "send_message", send_message)
+    monkeypatch.setattr(bot, "edit_message_text", edit_message_text)
+    monkeypatch.setattr(bot, "answer_callback_query",
+                        lambda *a, **k: answers.append((a, k)))
+    monkeypatch.setattr(bot, "clear_step_handler_by_chat_id",
+                        lambda chat_id: cleared.append(chat_id))
     monkeypatch.setattr(bot, "register_next_step_handler_by_chat_id",
                         lambda chat_id, fn, *a, **k: by_chat.append((chat_id, fn)))
     monkeypatch.setattr(bot, "register_next_step_handler",
                         lambda message, fn, *a, **k: by_message.append((message, fn)))
 
-    return SimpleNamespace(sent=sent, by_chat=by_chat, by_message=by_message)
+    return SimpleNamespace(sent=sent, by_chat=by_chat, by_message=by_message,
+                           edits=edits, answers=answers, cleared=cleared)
 
 
 @pytest.fixture
@@ -88,6 +111,56 @@ def test_platform_quantity_valid_and_invalid(bot_calls, platform_module):
     p.get_platform_cargo_qty(make_message(uid, "2,5"))
     assert p.user_data[uid]["temp_qty"] == "2.5"
     assert bot_calls.by_chat[-1] == (uid, p.get_platform_places)
+    assert "количество грузовых мест" in last_sent_text(bot_calls)
+    markup = bot_calls.sent[-1][1].get("reply_markup")
+    assert markup is not None
+    buttons = [button.text.lower() for row in markup.keyboard for button in row]
+    assert any("число" in button for button in buttons)
+    assert any("навал" in button for button in buttons)
+
+
+def test_platform_places_nav_button(bot_calls, platform_module):
+    p = platform_module
+    uid = 109
+    p.user_data[uid] = {}
+
+    p.handle_p_places_nav(make_callback(uid, "p_places_nav"))
+
+    assert p.user_data[uid]["temp_places"] == "нав."
+    assert bot_calls.by_chat[-1] == (uid, p.get_platform_mass)
+    assert uid in bot_calls.cleared
+    assert "нав." in bot_calls.edits[-1]["text"]
+
+    p.user_data[uid].update({
+        "temp_cargo_name": "Песок",
+        "temp_unit": "тн",
+        "temp_qty": "10",
+    })
+    p.get_platform_mass(make_message(uid, "20"))
+    assert p.user_data[uid]["cargos"][0]["places"] == "нав."
+
+
+def test_platform_places_number_button(bot_calls, platform_module):
+    p = platform_module
+    uid = 110
+    p.user_data[uid] = {}
+
+    p.handle_p_places_num(make_callback(uid, "p_places_num"))
+
+    assert bot_calls.by_chat[-1] == (uid, p.get_platform_places)
+    assert uid in bot_calls.cleared
+    assert "Введите" in bot_calls.edits[-1]["text"]
+
+
+def test_platform_places_accepts_naval_text(bot_calls, platform_module):
+    p = platform_module
+    uid = 111
+    p.user_data[uid] = {}
+
+    p.get_platform_places(make_message(uid, "Навал."))
+
+    assert p.user_data[uid]["temp_places"] == "нав."
+    assert bot_calls.by_chat[-1] == (uid, p.get_platform_mass)
 
 
 def test_platform_mass_invalid_and_valid(bot_calls, platform_module):
