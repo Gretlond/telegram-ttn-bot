@@ -228,14 +228,15 @@ def test_ttn_header_settings_are_used_in_document(monkeypatch):
     doc = Document(path)
 
     top = doc.tables[0]
-    assert len(top.rows) == 2
+    assert len(top.rows) == 1
     assert [cell.text for cell in top.rows[0].cells] == [
-        "", "Грузоотправитель", "Грузополучатель",
-        "Заказчик автомобильной перевозки (плательщик)",
+        "111111111", "222222222", "333333333",
     ]
-    assert [cell.text for cell in top.rows[1].cells] == [
-        "УНП", "111111111", "222222222", "333333333",
-    ]
+    top_text = " ".join(cell.text for cell in top.rows[0].cells)
+    assert "УНП" not in top_text
+    assert "Грузоотправитель" not in top_text
+    assert "Грузополучатель" not in top_text
+    assert "Заказчик" not in top_text
 
     body = doc.tables[1]
     assert body.rows[4].cells[0].text == "ОАО «Тест-Заказчик»"

@@ -119,24 +119,22 @@ def test_demo_shipper_names_sit_above_preprinted_signature_lines():
     assert by_key["consignee"].paragraph_format.space_before == pytest.approx(Pt(37), abs=1000)
 
 
-def test_demo_top_header_table_has_role_labels_and_unp_fields():
+def test_demo_top_header_contains_only_unp_values():
+    """Верхняя таблица и подпись УНП уже есть на типографском бланке."""
     template = Path(__file__).resolve().parents[1] / "assets" / "Шаблон_ТТН_демо.docx"
     doc = Document(template)
 
     table = doc.tables[0]
-    assert len(table.rows) == 2
-    assert len(table.columns) == 4
+    assert len(table.rows) == 1
+    assert len(table.columns) == 3
     assert [cell.text for cell in table.rows[0].cells] == [
-        "",
-        "Грузоотправитель",
-        "Грузополучатель",
-        "Заказчик автомобильной перевозки (плательщик)",
-    ]
-    assert [cell.text for cell in table.rows[1].cells] == [
-        "УНП",
         "{{shipper_unp}}",
         "{{consignee_unp}}",
         "{{customer_unp}}",
     ]
-    assert table._tbl.tblPr.find(qn("w:tblLayout")).get(qn("w:type")) == "fixed"
+    text = " ".join(cell.text for cell in table.rows[0].cells)
+    assert "УНП" not in text
+    assert "Грузоотправитель" not in text
+    assert "Грузополучатель" not in text
+    assert "Заказчик" not in text
 
