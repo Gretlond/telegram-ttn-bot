@@ -123,9 +123,10 @@ def _replace_placeholders(paragraph, data):
                     node.text = text[local_end:]
 
 
-def fill_documents(data, output_name):
-    if not os.path.exists(RESULT_FOLDER):
-        os.makedirs(RESULT_FOLDER)
+def fill_documents(data, output_name, output_dir=None):
+    result_folder = output_dir or RESULT_FOLDER
+    if not os.path.exists(result_folder):
+        os.makedirs(result_folder)
 
     defaults = {
         'day': '', 'month': '', 'year': '', 'waybill_number': '',
@@ -262,7 +263,7 @@ def fill_documents(data, output_name):
                     tbl.insert(row_idx + i, new_tr)
                 cargo_table_processed = True
 
-    result_path = os.path.join(RESULT_FOLDER, f"{output_name}_ТТН.docx")
+    result_path = os.path.join(result_folder, f"{output_name}_ТТН.docx")
     doc.save(result_path)
     return result_path, result_path, result_path
 

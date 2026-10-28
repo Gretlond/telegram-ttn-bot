@@ -132,9 +132,10 @@ def show_master_menu(user_id, message_id=None):
     name = master.get('name', 'Мастер')
     text = (f"👨‍💼 *Кабинет мастера*\n\n👤 Имя: {name}\n🆔 ID: `{user_id}`\n\n"
             f"📋 *Функции:*\n• Просмотр заявок\n• Редактирование заявок\n"
-            f"• Расчёт стоимости\n• Печать PDF\n\n_Для выхода напишите /start_")
+            f"• Расчёт стоимости\n• Печать ТТН\n\n_Для выхода напишите /start_")
     m = types.InlineKeyboardMarkup(row_width=1)
     m.add(types.InlineKeyboardButton("📋 Мои заявки", callback_data="master_orders"))
+    m.add(types.InlineKeyboardButton("🖨 Пакетная печать", callback_data="batch_print_menu"))
     m.add(types.InlineKeyboardButton("📦 Текущий реестр", callback_data="master_registry"))
     try:
         is_admin = int(user_id) == int(YOUR_TELEGRAM_ID)
@@ -374,7 +375,7 @@ def pdf_order(call):
             pass
 
 
-def rebuild_word_from_order(order_id):
+def rebuild_word_from_order(order_id, output_dir=None):
     order = orders_db.get_order(order_id)
     if not order: return None
     cargos = orders_db.get_cargos(order_id)
@@ -423,7 +424,7 @@ def rebuild_word_from_order(order_id):
         'cargos': cargos,
     }
     output_name = f"ТТН_{order['waybill_number']}_order{order['id']}"
-    _, _, merged_path = fill_documents(data, output_name)
+    _, _, merged_path = fill_documents(data, output_name, output_dir=output_dir)
     return merged_path
 
 

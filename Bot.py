@@ -38,6 +38,7 @@ def _master_button(message):
 import master_menu
 import master_edit
 import registry
+import batch_print
 import driver_reg
 import driver_order
 import admin_menu

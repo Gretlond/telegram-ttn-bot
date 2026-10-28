@@ -442,6 +442,93 @@ def get_all_batches(master_id):
     rows = cursor.fetchall(); conn.close()
     return [dict(r) for r in rows]
 
+
+def assign_orders_to_batch(batch_id, order_ids, expected_counter=None):
+    """Атомарно назначает номера ТТН и строки реестра нескольким заявкам.
+
+    Номера идут вниз от номера сверху пачки, строки реестра — с конца (25, 24...).
+    Если хотя бы одну заявку уже успели изменить, вся операция откатывается.
+    """
+    ids = [int(order_id) for order_id in order_ids]
+    if not ids:
+        raise ValueError("Не выбрано ни одной заявки")
+    if len(set(ids)) != len(ids):
+        raise ValueError("В пакете есть повторяющиеся заявки")
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        batch = conn.execute(
+            "SELECT * FROM batches WHERE id = ?", (int(batch_id),)
+        ).fetchone()
+        if not batch:
+            raise ValueError("Пачка не найдена")
+        if batch["closed_at"]:
+            raise ValueError("Пачка уже закрыта")
+
+        counter = int(batch["counter"] or 0)
+        if expected_counter is not None and counter != int(expected_counter):
+            raise ValueError("Счётчик пачки изменился. Сформируйте пакет заново.")
+        if counter + len(ids) > BATCH_SIZE:
+            raise ValueError("В пачке недостаточно свободных строк")
+
+        assignments = []
+        printed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for index, order_id in enumerate(ids):
+            offset = counter + index
+            order_row = BATCH_SIZE - offset
+            ttn_number = compute_ttn_number(batch["start_number"], -offset)
+
+            order = conn.execute(
+                """SELECT id, master_id, status, ttn_number, deleted_at
+                   FROM orders WHERE id = ?""",
+                (order_id,),
+            ).fetchone()
+            if not order:
+                raise ValueError(f"Заявка №{order_id} не найдена")
+            if int(order["master_id"]) != int(batch["master_id"]):
+                raise ValueError(f"Заявка №{order_id} принадлежит другому мастеру")
+            if order["deleted_at"]:
+                raise ValueError(f"Заявка №{order_id} удалена")
+            if order["status"] not in ("new", "confirmed") or order["ttn_number"]:
+                raise ValueError(f"Заявка №{order_id} уже распечатана или изменена")
+
+            cursor = conn.execute(
+                """UPDATE orders
+                   SET ttn_number = ?, batch_id = ?, order_row = ?,
+                       status = 'printed', printed_at = ?
+                   WHERE id = ? AND master_id = ?
+                     AND deleted_at IS NULL
+                     AND status IN ('new', 'confirmed')
+                     AND (ttn_number IS NULL OR ttn_number = '')""",
+                (ttn_number, int(batch_id), order_row, printed_at,
+                 order_id, int(batch["master_id"])),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"Заявка №{order_id} уже изменилась")
+
+            assignments.append({
+                "order_id": order_id,
+                "ttn_number": ttn_number,
+                "order_row": order_row,
+                "batch_id": int(batch_id),
+            })
+
+        cursor = conn.execute(
+            "UPDATE batches SET counter = counter + ? WHERE id = ? AND counter = ?",
+            (len(ids), int(batch_id), counter),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Не удалось обновить счётчик пачки")
+        conn.commit()
+        return assignments
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def set_order_ttn(order_id, ttn_number, batch_id, order_row=None):
     conn = get_connection(); cursor = conn.cursor()
     cursor.execute("UPDATE orders SET ttn_number = ?, batch_id = ?, order_row = ? WHERE id = ?",
