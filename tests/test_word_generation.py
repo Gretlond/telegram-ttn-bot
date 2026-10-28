@@ -125,6 +125,7 @@ def test_word_keeps_cents_blank_without_calculation():
         for cell in row.cells
     ]
     assert "00" not in cells
+    assert all("{{cargo." not in cell for cell in cells)
 
 
 def test_word_header_fills_date_and_keeps_unloading_separate():

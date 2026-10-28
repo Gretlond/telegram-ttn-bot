@@ -227,10 +227,19 @@ def fill_documents(data, output_name, output_dir=None):
 
                     # Шаблон ожидает si (ед. изм.) и unit (количество).
                     # В данных бота unit — единица измерения, quantity — количество.
-                    cargo_values = dict(cargo)
-                    if 'si' not in cargo_values:
+                    # Пустые значения по умолчанию не дают незаполненным полям
+                    # стоимости попасть в документ как {{cargo.price}} и т.п.
+                    cargo_values = {
+                        key: '' for key in (
+                            'cargo_name', 'si', 'unit', 'price', 'total_cost',
+                            'vat_rate', 'vat_cost', 'total_with_vat', 'places',
+                            'cargo_qty', 'trips',
+                        )
+                    }
+                    cargo_values.update(cargo)
+                    if 'si' not in cargo:
                         cargo_values['si'] = cargo.get('unit', '')
-                    if 'quantity' in cargo_values:
+                    if 'quantity' in cargo:
                         cargo_values['unit'] = cargo.get('quantity', '')
 
                     new_row = _Row(new_tr, table)

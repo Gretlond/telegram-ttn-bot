@@ -36,6 +36,7 @@ import batch_print
 import batch_word
 import orders_db
 import registry_filler
+import utils
 import word_filler
 
 MASTER_ID = 999001
@@ -44,6 +45,14 @@ ORDER_COUNT = 10
 
 
 def _order_data(number):
+    quantity = number
+    price = 1000
+    total_cost = price * quantity
+    vat_cost = round(total_cost * 0.2, 2)
+    total_with_vat = round(total_cost + vat_cost, 2)
+    vat_text, vat_cents = utils.amount_to_words_parts(vat_cost)
+    total_text, total_cents = utils.amount_to_words_parts(total_with_vat)
+
     return {
         "day": "22",
         "month": "10",
@@ -55,11 +64,22 @@ def _order_data(number):
         "loading_point": "Склад самопроверки",
         "unloading_point": f"Объект {number}",
         "driver_name": f"Тестовый водитель {number}",
+        "total_vat_text": vat_text,
+        "total_vat_cents": vat_cents,
+        "total_with_vat_text": total_text,
+        "total_with_vat_cents": total_cents,
         "cargos": [{
             "cargo_name": f"Тестовый груз {number}",
             "si": "т",
-            "unit": "10",
-            "cargo_qty": "10",
+            "unit": "т",
+            "quantity": str(quantity),
+            "cargo_qty": str(quantity),
+            "places": str(quantity),
+            "price": str(price),
+            "total_cost": f"{total_cost:.2f}",
+            "vat_rate": "20%",
+            "vat_cost": f"{vat_cost:.2f}",
+            "total_with_vat": f"{total_with_vat:.2f}",
         }],
     }
 
@@ -126,6 +146,15 @@ def _section_layout(doc):
          section.orientation)
         for section in doc.sections
     ]
+
+
+def _document_text(doc):
+    parts = [paragraph.text for paragraph in doc.paragraphs]
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                parts.append(cell.text)
+    return "\n".join(parts)
 
 
 def _copy_outputs(record, registry_path, output_dir):
@@ -222,6 +251,11 @@ def run_selftest(template, output_dir, keep_temp=False):
         report.check(
             _section_layout(back_doc) == [source_layout[1]] * expected_sections,
             "Задние страницы сохранили размер бумаги и поля шаблона")
+        for label, doc in (("переднем", front_doc), ("заднем", back_doc)):
+            text = _document_text(doc)
+            report.check(
+                "{{" not in text and "cargo." not in text,
+                f"В {label} файле нет незаполненных подстановок стоимости")
 
         # Подтверждение запускаем через настоящий обработчик, но Telegram
         # подменён заглушкой: наружу ничего не отправляется.
