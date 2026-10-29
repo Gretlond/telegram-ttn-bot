@@ -89,6 +89,21 @@ def _available_orders(master_id):
     ]
 
 
+def _select_all_order_ids(master_id):
+    """Порядок для кнопки «Выделить все»: от старых заявок к новым.
+
+    Первая заявка получает строку 25 и самый высокий номер ТТН.
+    Ручной выбор эту сортировку не использует: там сохраняется порядок нажатий.
+    """
+    return [
+        order["id"]
+        for order in sorted(
+            _available_orders(master_id),
+            key=lambda order: int(order["id"]),
+        )
+    ]
+
+
 def _active_batch_info(master_id):
     batch = orders_db.get_active_batch(int(master_id))
     if not batch:
@@ -154,7 +169,9 @@ def render_batch_menu(user_id, message_id=None, notice=None):
         f"Доступно нераспечатанных заявок: *{len(available)}*\n"
         f"Выбрано: *{len(selected)}* из {free} свободных мест\n\n"
         "Порядок печати — порядок нажатия. Первая выбранная заявка "
-        "получит строку 25 реестра.\n\n"
+        "получит строку 25 реестра.\n"
+        "«Выделить все» выбирает от старых к новым: строка 25 — "
+        "самая старая заявка.\n\n"
     )
     if active:
         text += (
@@ -274,11 +291,11 @@ def batch_select_all(call):
     free = active["free"] if active else orders_db.BATCH_SIZE
     session = _session(user_id)
     selected = session.setdefault("selected", [])
-    for order in _available_orders(user_id):
+    for order_id in _select_all_order_ids(user_id):
         if len(selected) >= free:
             break
-        if order["id"] not in selected:
-            selected.append(order["id"])
+        if order_id not in selected:
+            selected.append(order_id)
     bot.answer_callback_query(call.id, f"Выбрано: {len(selected)}")
     render_batch_menu(user_id, call.message.message_id)
 

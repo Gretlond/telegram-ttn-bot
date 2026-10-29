@@ -281,3 +281,78 @@ def test_batch_cancel_deletes_files_and_keeps_orders_new(
     assert batch_print._get_pending(500) is None
     assert not (tmp_path / "front.docx").exists()
     assert not (tmp_path / "back.docx").exists()
+
+
+def test_batch_select_all_orders_oldest_first_from_row_25(
+    temp_db, tmp_path, monkeypatch
+):
+    import batch_print
+    import registry_filler
+
+    order_ids = [
+        temp_db.save_order(
+            _order_data(number), master_id=500, driver_id=900 + number)
+        for number in range(1, 11)
+    ]
+    monkeypatch.setattr(batch_print, "PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(batch_print.bot, "answer_callback_query", lambda *a, **k: None)
+    monkeypatch.setattr(batch_print, "render_batch_menu", lambda *a, **k: None)
+    batch_print._selection_state.clear()
+
+    batch_print.batch_select_all(_call(500, "batch_select_all"))
+
+    selected = batch_print._session(500)["selected"]
+    assert selected == order_ids
+
+    assignments = batch_print._make_assignments(selected, "0217975", 0)
+    assert [a["order_id"] for a in assignments] == order_ids
+    assert [a["order_row"] for a in assignments] == list(range(25, 15, -1))
+    assert [a["ttn_number"] for a in assignments] == [
+        orders_db.compute_ttn_number("0217975", -offset)
+        for offset in range(10)
+    ]
+
+    batch_id = temp_db.create_batch(500, "0217975")
+    temp_db.assign_orders_to_batch(batch_id, selected)
+    monkeypatch.setattr(registry_filler, "RESULT_FOLDER", str(tmp_path))
+    path = registry_filler.generate_registry_docx(
+        temp_db.get_batch_orders(batch_id), "Мастер", "select_all_registry")
+
+    table = Document(path).tables[0]
+    assert table.rows[25].cells[0].text == "25"
+    assert table.rows[25].cells[2].text == "0217975"
+    assert table.rows[16].cells[0].text == "16"
+    assert table.rows[16].cells[2].text == "0217966"
+
+
+def test_batch_select_all_respects_free_slots_oldest_first(
+    temp_db, tmp_path, monkeypatch
+):
+    import batch_print
+
+    order_ids = [
+        temp_db.save_order(_order_data(number), master_id=500, driver_id=900)
+        for number in range(1, 11)
+    ]
+    monkeypatch.setattr(batch_print, "PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(batch_print.bot, "answer_callback_query", lambda *a, **k: None)
+    monkeypatch.setattr(batch_print, "render_batch_menu", lambda *a, **k: None)
+    monkeypatch.setattr(
+        batch_print, "_active_batch_info", lambda user_id: {"free": 5})
+    batch_print._selection_state.clear()
+
+    batch_print.batch_select_all(_call(500, "batch_select_all"))
+
+    assert batch_print._session(500)["selected"] == order_ids[:5]
+
+
+def test_batch_manual_selection_keeps_tap_order(temp_db):
+    import batch_print
+
+    first = temp_db.save_order(_order_data(1), master_id=500, driver_id=900)
+    second = temp_db.save_order(_order_data(2), master_id=500, driver_id=901)
+
+    assignments = batch_print._make_assignments([second, first], "0217975", 0)
+
+    assert [a["order_id"] for a in assignments] == [second, first]
+    assert [a["order_row"] for a in assignments] == [25, 24]
