@@ -8,8 +8,8 @@ from database import LOCATIONS
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 YOUR_TELEGRAM_ID = int(os.environ.get('YOUR_TELEGRAM_ID', '0'))
-MASTERS_FILE = "masters.json"
-LAST_ORDERS_FILE = "last_orders.json"
+MASTERS_FILE = os.environ.get("MASTERS_FILE", "masters.json")
+LAST_ORDERS_FILE = os.environ.get("LAST_ORDERS_FILE", "last_orders.json")
 REGISTRY_MASTER_NAME = os.environ.get('REGISTRY_MASTER_NAME', 'Мастер')
 
 bot = telebot.TeleBot(BOT_TOKEN)

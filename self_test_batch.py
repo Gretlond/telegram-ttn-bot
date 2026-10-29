@@ -25,8 +25,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+MASTER_ID = 999001
+SELFTEST_HOME = Path(tempfile.mkdtemp(prefix="ttn_batch_selftest_home_"))
 os.environ.setdefault("BOT_TOKEN", "123456:SELF_TEST_TOKEN")
-os.environ.setdefault("YOUR_TELEGRAM_ID", "1")
+os.environ["YOUR_TELEGRAM_ID"] = str(MASTER_ID)
+# config.py при старте сохраняет masters.json и last_orders.json.
+# Направляем их во временную папку, чтобы самопроверка не меняла production.
+os.environ["MASTERS_FILE"] = str(SELFTEST_HOME / "masters.json")
+os.environ["LAST_ORDERS_FILE"] = str(SELFTEST_HOME / "last_orders.json")
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
@@ -34,12 +40,12 @@ from docx import Document
 
 import batch_print
 import batch_word
+import config
 import orders_db
 import registry_filler
 import utils
 import word_filler
 
-MASTER_ID = 999001
 START_NUMBER = "7777000"
 ORDER_COUNT = 10
 
@@ -185,11 +191,18 @@ def run_selftest(template, output_dir, keep_temp=False):
     report.info(f"Дата: {datetime.now():%d.%m.%Y %H:%M:%S}")
     report.info(f"Шаблон: {template}")
     report.info(f"Временная папка: {runtime}")
+    report.info(f"Временная конфигурация: {SELFTEST_HOME}")
     report.info(f"Папка результатов: {output_dir}")
     report.info("=" * 70)
 
     try:
         # Изолированная база и папки: боевые данные не затрагиваются.
+        report.check(
+            Path(config.MASTERS_FILE).resolve().is_relative_to(
+                SELFTEST_HOME.resolve())
+            and Path(config.LAST_ORDERS_FILE).resolve().is_relative_to(
+                SELFTEST_HOME.resolve()),
+            "masters.json и last_orders.json не затрагивают production")
         orders_db.DB_FILE = str(runtime / "orders.db")
         orders_db.init_db()
         batch_print.PENDING_FILE = str(runtime / "pending.json")
@@ -460,13 +473,17 @@ def main():
         f"Самопроверка_пакетной_печати_{datetime.now():%Y%m%d_%H%M%S}"
     )
 
-    report = run_selftest(template, output_dir, args.keep_temp)
-    report_path = output_dir / "Отчёт_самопроверки.txt"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(report.text(), encoding="utf-8")
-    print(report.text())
-    print(f"\nОтчёт сохранён: {report_path}")
-    return 0 if report.failures == 0 else 1
+    try:
+        report = run_selftest(template, output_dir, args.keep_temp)
+        report_path = output_dir / "Отчёт_самопроверки.txt"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report.text(), encoding="utf-8")
+        print(report.text())
+        print(f"\nОтчёт сохранён: {report_path}")
+        return 0 if report.failures == 0 else 1
+    finally:
+        if not args.keep_temp:
+            shutil.rmtree(SELFTEST_HOME, ignore_errors=True)
 
 
 if __name__ == "__main__":
