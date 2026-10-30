@@ -2,6 +2,9 @@
 # ВОДИТЕЛЬ: ПРОВЕРКА ЗАЯВКИ, ОТПРАВКА И РЕДАКТИРОВАНИЕ
 # =============================================================
 import copy
+import os
+import shutil
+import tempfile
 from telebot import types
 
 from config import (bot, user_data, last_orders, save_last_orders,
@@ -27,6 +30,91 @@ def _notify_admin_safe(text):
         bot.send_message(YOUR_TELEGRAM_ID, text)
     except Exception as e:
         print(f"⚠️ Не удалось уведомить администратора: {e}")
+
+
+def _rebuild_order_document(order_id, output_dir=None):
+    """Собирает Word-файл заявки заново для повторной отправки."""
+    import master_menu
+    return master_menu.rebuild_word_from_order(order_id, output_dir=output_dir)
+
+
+def _delivery_message(order):
+    lines = [
+        "🔁 Повторная отправка заявки",
+        f"🆔 Заявка №{order.get('id')}",
+        f"Путевой: {order.get('waybill_number') or '—'}",
+        f"Дата: {order.get('date') or '—'}",
+        f"Маршрут: {order.get('loading_point') or '—'} → "
+        f"{order.get('unloading_point') or '—'}",
+        f"Водитель: {order.get('driver_name') or '—'}",
+    ]
+    if order.get("ttn_number"):
+        lines.append(f"ТТН: {order['ttn_number']}")
+    return "\n".join(lines)
+
+
+def resend_order_to_master(order_or_id, bot_api=None):
+    """Повторно отправляет заявку мастеру и обновляет статус доставки."""
+    api = bot_api or bot
+    if isinstance(order_or_id, dict):
+        order = dict(order_or_id)
+    else:
+        order = orders_db.get_order(order_or_id)
+    if not order or order.get("deleted_at"):
+        raise ValueError("Заявка не найдена или удалена")
+    order_id = int(order["id"])
+    if order.get("delivery_status") == "delivered":
+        return order_id
+    master_id = int(order.get("master_id") or 0)
+    if not master_id:
+        raise ValueError("У заявки не указан мастер")
+
+    temp_dir = tempfile.mkdtemp(prefix="delivery_retry_")
+    try:
+        api.send_message(master_id, _delivery_message(order))
+        api.send_message(master_id, "📄 Документ:")
+        document_path = _rebuild_order_document(
+            order_id, output_dir=temp_dir)
+        if not document_path or not os.path.exists(document_path):
+            raise RuntimeError("Не удалось восстановить документ заявки")
+        with open(document_path, "rb") as document:
+            api.send_document(
+                master_id, document, caption=f"📄 Заявка №{order_id}")
+    except Exception as e:
+        try:
+            orders_db.mark_order_delivery(order_id, "failed", str(e))
+        except Exception as status_error:
+            print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+        raise
+    else:
+        try:
+            orders_db.mark_order_delivery(order_id, "delivered")
+        except Exception as status_error:
+            print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+        return order_id
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def retry_undelivered_delivery(limit=20, bot_api=None):
+    """Повторно отправляет небольшую партию недоставленных заявок."""
+    attempted = orders_db.get_undelivered_orders(limit=limit)
+    delivered = []
+    failed = []
+    for order in attempted:
+        try:
+            resend_order_to_master(order, bot_api=bot_api)
+            delivered.append(int(order["id"]))
+        except Exception as e:
+            failed.append({
+                "id": int(order["id"]),
+                "error": str(e)[:300],
+            })
+    return {
+        "attempted": len(attempted),
+        "delivered": delivered,
+        "failed": failed,
+    }
 
 
 @bot.callback_query_handler(func=lambda c: c.data == 'confirm_order')

@@ -280,6 +280,16 @@ def status_ru(status):
             'deleted': '🗑 Удалена'}.get(status, f'❔ {status}')
 
 
+def delivery_status_ru(status):
+    """Человекочитаемый статус доставки заявки мастеру."""
+    return {
+        'delivered': '✅ доставлено мастеру',
+        'failed': '❌ не доставлено',
+        'pending': '⏳ ожидает отправки',
+        'unknown': '—',
+    }.get(status or 'unknown', f'❔ {status}')
+
+
 def find_masters_by_loading(loading_name):
     loc_id = None
     for l_id, l_info in LOCATIONS.items():

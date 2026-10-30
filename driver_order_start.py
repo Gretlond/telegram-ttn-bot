@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from config import (bot, user_data, last_orders, pending_drivers,
                     YOUR_TELEGRAM_ID, save_last_orders)
-from utils import safe_edit_message_text
+from utils import safe_edit_message_text, delivery_status_ru
 from keyboards import (get_companies_keyboard, get_drivers_keyboard,
                        get_cars_keyboard, get_confirm_car_keyboard,
                        get_date_keyboard, get_trailer_keyboard,
@@ -106,7 +106,8 @@ def show_month_orders(call):
     text = "📋 *Ваши заявки за этот месяц:*\n\n"
     for o in orders[:10]:
         text += (f"• {o['date']} • пут. {o['waybill_number']}\n"
-                 f"  🚛 {o['car_model']} ({o['car_plate']})\n\n")
+                 f"  🚛 {o['car_model']} ({o['car_plate']})\n"
+                 f"  📬 {delivery_status_ru(o.get('delivery_status'))}\n\n")
         m.add(types.InlineKeyboardButton(f"🔄 {o['date']} • {o['waybill_number']}",
                                          callback_data=f"repeat_hist_{o['id']}"))
     if len(orders) > 10:

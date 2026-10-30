@@ -66,6 +66,36 @@ def test_last_backup_reports_valid_copy(tmp_path):
     assert result is not None
     assert result["path"].endswith("2026-10-29")
     assert result["errors"] == []
+    assert result["age_hours"] >= 0
+
+
+def test_backup_monitor_reports_timer_and_missing_copy(tmp_path):
+    monitor = health.get_backup_monitor(
+        backup_dir=str(tmp_path / "missing"), timer_status="inactive")
+
+    assert monitor["timer_status"] == "inactive"
+    assert monitor["backup"] is None
+    assert any("таймер" in issue for issue in monitor["issues"])
+    assert any("не найдена" in issue for issue in monitor["issues"])
+    assert "Мониторинг резервных копий" in (
+        health.get_backup_alert(
+            backup_dir=str(tmp_path / "missing"), timer_status="inactive"))
+
+
+def test_backup_monitor_is_clean_when_timer_and_copy_ok(tmp_path):
+    target = tmp_path / "backup" / "2026-10-30"
+    target.mkdir(parents=True)
+    conn = sqlite3.connect(target / "orders.db")
+    conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    monitor = health.get_backup_monitor(
+        backup_dir=str(tmp_path / "backup"), timer_status="active")
+
+    assert monitor["issues"] == []
+    assert health.get_backup_alert(
+        backup_dir=str(tmp_path / "backup"), timer_status="active") is None
 
 
 def test_status_text_includes_delivery_problem_and_masters(

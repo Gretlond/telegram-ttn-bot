@@ -162,6 +162,20 @@ def _clear_pending(user_id, delete_files=False):
                     print(f"⚠️ Не удалось удалить {path}: {e}")
 
 
+def _restore_selection_from_record(user_id, record):
+    """Возвращает выбор из отменённого пакета, чтобы можно было исправить."""
+    session = _session(user_id)
+    selected = []
+    for assignment in (record or {}).get("assignments", []) or []:
+        try:
+            selected.append(int(assignment["order_id"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    session["selected"] = selected
+    session["plan"] = None
+    _save_selection_all()
+
+
 # =============================================================
 # ВЫБОР ЗАЯВОК
 # =============================================================
@@ -725,6 +739,8 @@ def render_pending(user_id, message_id=None):
         f"ТТН: с `{first['ttn_number']}` (стр. {first['order_row']}) "
         f"по `{last['ttn_number']}` (стр. {last['order_row']})\n"
         f"Файлы: {len(assignments) * batch_word.COPIES_PER_TTN} страниц каждый\n\n"
+        "📋 *Состав пакета:*\n"
+        f"{_format_plan_table(assignments)}\n\n"
         "🖨 *Порядок печати:*\n"
         "1. Распечатайте файл передних сторон.\n"
         "2. Переверните всю пачку.\n"
@@ -774,13 +790,14 @@ def batch_cancel_pending(call):
         bot.answer_callback_query(call.id, "Пакет уже отменён.")
         render_batch_menu(user_id, call.message.message_id)
         return
+    _restore_selection_from_record(user_id, record)
     _clear_pending(user_id, delete_files=True)
-    _selection_state.pop(user_id, None)
-    _save_selection_all()
     bot.answer_callback_query(call.id, "Пакет отменён.")
     bot.send_message(
         user_id,
         "❌ Пакет отменён. Номера ТТН и реестр не изменялись.\n"
+        "Выбор заявок восстановлен — можно исправить и сформировать пакет "
+        "заново.\n"
         "Если файлы уже были напечатаны, они не попадут в реестр.")
     render_batch_menu(user_id)
 
@@ -798,9 +815,9 @@ def _validate_pending_orders(user_id, record):
 
 
 def _invalidate_stale_pending(user_id, reason):
+    record = _get_pending(user_id)
+    _restore_selection_from_record(user_id, record)
     _clear_pending(user_id, delete_files=True)
-    _selection_state.pop(user_id, None)
-    _save_selection_all()
     bot.send_message(
         user_id,
         f"⚠️ {reason}\nПакет отменён, изменения в реестр не внесены. "

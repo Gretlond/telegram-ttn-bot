@@ -270,15 +270,19 @@ def test_batch_cancel_deletes_files_and_keeps_orders_new(
     record = _pending_record(tmp_path, batch_id, assignments)
 
     monkeypatch.setattr(batch_print, "PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(batch_print, "SELECTION_FILE", str(tmp_path / "selection.json"))
+    batch_print._reset_selection_cache()
     batch_print._put_pending(500, record)
     monkeypatch.setattr(batch_print.bot, "answer_callback_query", lambda *a, **k: None)
     monkeypatch.setattr(batch_print.bot, "send_message", lambda *a, **k: None)
+    monkeypatch.setattr(batch_print, "render_batch_menu", lambda *a, **k: None)
 
     batch_print.batch_cancel_pending(_call(500, "batch_cancel_pending"))
 
     assert temp_db.get_order(first)["status"] == "new"
     assert temp_db.get_batch(batch_id)["counter"] == 0
     assert batch_print._get_pending(500) is None
+    assert batch_print._session(500)["selected"] == [first]
     assert not (tmp_path / "front.docx").exists()
     assert not (tmp_path / "back.docx").exists()
 
@@ -377,6 +381,35 @@ def test_batch_plan_shows_full_preview(temp_db, tmp_path, monkeypatch):
     text = messages[0][0][1]
     assert "Полный предпросмотр" in text
     assert f"{first}" in text and f"{second}" in text
+    assert "WB-1" in text and "WB-2" in text
+    assert "0217975" in text and "0217974" in text
+    assert "25" in text and "24" in text
+
+
+def test_generated_package_shows_full_preview(
+    temp_db, tmp_path, monkeypatch
+):
+    import batch_print
+
+    first = temp_db.save_order(_order_data(1), master_id=500, driver_id=900)
+    second = temp_db.save_order(_order_data(2), master_id=500, driver_id=901)
+    assignments = batch_print._make_assignments([first, second], "0217975", 0)
+    record = _pending_record(tmp_path, None, assignments)
+    monkeypatch.setattr(
+        batch_print, "PENDING_FILE", str(tmp_path / "pending.json"))
+    monkeypatch.setattr(
+        batch_print, "SELECTION_FILE", str(tmp_path / "selection.json"))
+    batch_print._reset_selection_cache()
+    batch_print._put_pending(500, record)
+    messages = []
+    monkeypatch.setattr(
+        batch_print.bot, "send_message",
+        lambda *args, **kwargs: messages.append((args, kwargs)))
+
+    batch_print.render_pending(500)
+
+    text = messages[0][0][1]
+    assert "Состав пакета" in text
     assert "WB-1" in text and "WB-2" in text
     assert "0217975" in text and "0217974" in text
     assert "25" in text and "24" in text

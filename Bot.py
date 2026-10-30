@@ -56,9 +56,22 @@ admin_menu.register(bot, MASTERS, save_masters, YOUR_TELEGRAM_ID)
 # =============================================================
 import time
 import requests
+import health
+
+
+def notify_backup_problems():
+    """При старте сразу сообщаем администратору о проблеме автобэкапа."""
+    try:
+        alert = health.get_backup_alert()
+        if alert:
+            bot.send_message(YOUR_TELEGRAM_ID, alert)
+    except Exception as e:
+        print(f"⚠️ Не удалось проверить автобэкап: {e}")
+
 
 if __name__ == "__main__":
     print("Бот запущен. Нажмите Ctrl+C для остановки.")
+    notify_backup_problems()
 
     while True:
         try:

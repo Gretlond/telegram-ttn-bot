@@ -3,12 +3,15 @@
 # =============================================================
 import os
 import re
+import subprocess
 from datetime import datetime
 
 import backup
 import orders_db
 
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+BACKUP_TIMER_UNIT = "ttn_backup.timer"
+BACKUP_MAX_AGE_HOURS = 48
 
 
 def human_size(size):
@@ -106,13 +109,71 @@ def get_last_backup(backup_dir=None):
     if not candidates:
         return None
     path = max(candidates, key=lambda item: os.path.getmtime(item))
+    mtime = os.path.getmtime(path)
+    age_hours = max(0.0, (datetime.now().timestamp() - mtime) / 3600.0)
     errors = backup.verify_backup(path)
     return {
         "path": path,
-        "mtime": datetime.fromtimestamp(os.path.getmtime(path)).strftime(
+        "mtime": datetime.fromtimestamp(mtime).strftime(
             "%Y-%m-%d %H:%M:%S"),
+        "age_hours": age_hours,
         "errors": errors,
     }
+
+
+def get_backup_timer_status():
+    """Статус systemd-таймера автобэкапа без запуска самих копий."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", BACKUP_TIMER_UNIT],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return "unknown"
+    output = (result.stdout or result.stderr or "").strip()
+    if not output:
+        return "unknown"
+    return output.splitlines()[0].strip()
+
+
+def get_backup_monitor(backup_dir=None, timer_status=None):
+    """Сводка по автобэкапу: таймер, последняя копия и проблемы."""
+    if timer_status is None:
+        timer_status = get_backup_timer_status()
+    info = get_last_backup(backup_dir)
+    issues = []
+    if timer_status != "active":
+        issues.append(
+            f"таймер автобэкапа {BACKUP_TIMER_UNIT} не активен "
+            f"({timer_status})")
+    if not info:
+        issues.append("резервная копия не найдена")
+    else:
+        if info.get("errors"):
+            issues.append("последняя копия не прошла проверку: "
+                          + "; ".join(info["errors"])[:200])
+        if info.get("age_hours", 0) > BACKUP_MAX_AGE_HOURS:
+            age = int(round(info["age_hours"]))
+            issues.append(f"последняя копия старше {BACKUP_MAX_AGE_HOURS} ч "
+                          f"({age} ч назад)")
+    return {
+        "timer_status": timer_status,
+        "backup": info,
+        "issues": issues,
+    }
+
+
+def get_backup_alert(backup_dir=None, timer_status=None):
+    """Текст предупреждения для администратора или None, если всё в порядке."""
+    monitor = get_backup_monitor(backup_dir, timer_status=timer_status)
+    if not monitor["issues"]:
+        return None
+    lines = ["⚠️ Мониторинг резервных копий"]
+    for issue in monitor["issues"]:
+        lines.append(f"• {issue}")
+    lines.append("")
+    lines.append("Проверьте автобэкап: systemctl status ttn_backup.service")
+    return "\n".join(lines)
 
 
 def _delivery_lines():
@@ -141,7 +202,8 @@ def _delivery_lines():
     return lines
 
 
-def build_status_text(master_checks, db_file=None, backup_dir=None):
+def build_status_text(master_checks, db_file=None, backup_dir=None,
+                      timer_status=None):
     lines = ["🩺 Состояние бота", ""]
 
     db = get_database_info(db_file)
@@ -169,15 +231,32 @@ def build_status_text(master_checks, db_file=None, backup_dir=None):
     except Exception as e:
         lines.append(f"Доставка: ошибка чтения БД ({e})")
 
-    last_backup = get_last_backup(backup_dir)
+    monitor = get_backup_monitor(backup_dir, timer_status=timer_status)
+    timer_labels = {
+        "active": "✅ активен",
+        "inactive": "❌ не активен",
+        "failed": "❌ ошибка",
+        "activating": "⏳ запускается",
+        "unknown": "⚠️ неизвестно",
+    }
+    lines.append(
+        f"Автобэкап: {timer_labels.get(monitor['timer_status'], '⚠️ ошибка')} "
+        f"({monitor['timer_status']})")
+    last_backup = monitor["backup"]
     if last_backup:
         state = "✅ проверен" if not last_backup["errors"] else "⚠️ ошибки"
+        age = int(round(last_backup.get("age_hours", 0)))
         lines.append(
-            f"Последний бэкап: {last_backup['mtime']} — {state}")
+            f"Последний бэкап: {last_backup['mtime']} — {state}, "
+            f"{age} ч назад")
         if last_backup["errors"]:
             lines.append("  " + "; ".join(last_backup["errors"])[:300])
     else:
         lines.append("Последний бэкап: не найден")
+    if monitor["issues"]:
+        lines.append("⚠️ Проблемы автобэкапа:")
+        for issue in monitor["issues"]:
+            lines.append(f"  • {issue}")
 
     lines.append("")
     lines.append("Мастера:")

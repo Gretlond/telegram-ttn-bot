@@ -7,6 +7,7 @@ import health
 import orders_db
 from audit_format import format_events
 from config import pending_platform_cargos
+from utils import delivery_status_ru
 
 
 def register(bot, masters_dict, save_masters_fn, admin_id):
@@ -134,6 +135,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         )
         m.add(types.InlineKeyboardButton("📋 Реквизиты ТТН", callback_data="adm_ttn_header"))
         m.add(types.InlineKeyboardButton("🩺 Состояние бота", callback_data="adm_health"))
+        m.add(types.InlineKeyboardButton("📩 Доставка заявок", callback_data="adm_delivery"))
         m.add(types.InlineKeyboardButton("🕘 Аудит заявок", callback_data="adm_audit"))
         m.add(types.InlineKeyboardButton("⬅️ В кабинет", callback_data="master_back"))
         return m
@@ -167,6 +169,8 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         m = types.InlineKeyboardMarkup(row_width=1)
         m.add(types.InlineKeyboardButton(
             "🔄 Проверить снова", callback_data="adm_health"))
+        m.add(types.InlineKeyboardButton(
+            "📩 Доставка заявок", callback_data="adm_delivery"))
         m.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="adm_menu"))
         try:
             bot.edit_message_text(
@@ -229,6 +233,94 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         state.pop(uid, None)
         bot.send_message(uid, f"✅ Сохранено: {label}")
         show_ttn_header(uid)
+
+    # =========================================================
+    # ДОСТАВКА ЗАЯВОК МАСТЕРАМ
+    # =========================================================
+    DELIVERY_LIMIT = 10
+
+    def show_delivery(uid, msg_id=None):
+        orders = orders_db.get_undelivered_orders(limit=DELIVERY_LIMIT)
+        text = "📩 Доставка заявок мастерам\n\n"
+        if not orders:
+            text += "✅ Все сохранённые заявки доставлены мастерам."
+        else:
+            text += f"Недоставлено (первые {len(orders)}):\n\n"
+            for order in orders:
+                status = delivery_status_ru(order.get("delivery_status"))
+                error = " ".join(
+                    (order.get("delivery_error") or "").split())
+                if len(error) > 100:
+                    error = error[:97] + "..."
+                text += (
+                    f"№{order['id']} • мастер {order.get('master_id')} • "
+                    f"{status}\n")
+                if error:
+                    text += f"  ⚠️ {error}\n"
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        if orders:
+            markup.add(types.InlineKeyboardButton(
+                "🔁 Повторить все", callback_data="adm_delivery_retry_all"))
+            for order in orders:
+                markup.add(types.InlineKeyboardButton(
+                    f"🔁 Повторить №{order['id']}",
+                    callback_data=f"adm_delivery_retry|{order['id']}"))
+        markup.add(types.InlineKeyboardButton(
+            "🔄 Обновить", callback_data="adm_delivery"))
+        markup.add(types.InlineKeyboardButton(
+            "⬅️ Назад", callback_data="adm_menu"))
+
+        if msg_id:
+            try:
+                bot.edit_message_text(
+                    chat_id=uid, message_id=msg_id, text=text,
+                    reply_markup=markup)
+                return
+            except Exception:
+                pass
+        bot.send_message(uid, text, reply_markup=markup)
+
+    @bot.callback_query_handler(func=lambda c: c.data == 'adm_delivery')
+    def cb_delivery(call):
+        if not check(call): return
+        bot.answer_callback_query(call.id)
+        show_delivery(call.message.chat.id, call.message.message_id)
+
+    @bot.callback_query_handler(func=lambda c: c.data == 'adm_delivery_retry_all')
+    def cb_delivery_retry_all(call):
+        if not check(call): return
+        bot.answer_callback_query(call.id, "Повторяю доставку...")
+        from driver_order_summary import retry_undelivered_delivery
+        result = retry_undelivered_delivery()
+        show_delivery(call.message.chat.id, call.message.message_id)
+        bot.send_message(
+            call.message.chat.id,
+            f"🔁 Повторная доставка: отправлено {len(result['delivered'])}, "
+            f"ошибок {len(result['failed'])}.")
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data.startswith('adm_delivery_retry|'))
+    def cb_delivery_retry_one(call):
+        if not check(call): return
+        try:
+            order_id = int(call.data.split('|', 1)[1])
+        except (IndexError, ValueError):
+            bot.answer_callback_query(call.id, "Ошибка номера заявки.")
+            return
+        bot.answer_callback_query(call.id, "Повторяю доставку...")
+        from driver_order_summary import resend_order_to_master
+        try:
+            resend_order_to_master(order_id)
+        except Exception as e:
+            bot.send_message(
+                call.message.chat.id,
+                f"❌ Заявка №{order_id} не доставлена:\n{e}")
+        else:
+            bot.send_message(
+                call.message.chat.id,
+                f"✅ Заявка №{order_id} повторно доставлена мастеру.")
+        show_delivery(call.message.chat.id, call.message.message_id)
 
     # =========================================================
     # АУДИТ И УДАЛЁННЫЕ ЗАЯВКИ
