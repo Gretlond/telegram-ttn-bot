@@ -24,9 +24,11 @@ def make_data():
     }
 
 
-def prepare(monkeypatch, save_calls, fail_word=False):
+def prepare(monkeypatch, save_calls, fail_word=False, mark_calls=None):
     import driver_order_summary as summary
     from config import user_data
+
+    mark_calls = [] if mark_calls is None else mark_calls
 
     path = Path('fake_order.docx')
     path.write_bytes(b'test')
@@ -45,6 +47,10 @@ def prepare(monkeypatch, save_calls, fail_word=False):
                             save_calls.append((master_id, driver_id)) or len(save_calls)))
     monkeypatch.setattr(summary.orders_db, 'update_order_field',
                         lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        summary.orders_db, 'mark_order_delivery',
+        lambda order_id, status, error=None: (
+            mark_calls.append((order_id, status, error)) or True))
     monkeypatch.setattr(summary.bot, 'send_message',
                         lambda *args, **kwargs: SimpleNamespace(message_id=1))
     monkeypatch.setattr(summary.bot, 'send_document', lambda *args, **kwargs: None)
@@ -81,3 +87,33 @@ def test_word_failure_does_not_save_or_report_success(monkeypatch):
     texts = [str(args[1]) for args in sent if len(args) > 1]
     assert any('НЕ отправлена' in text for text in texts)
     assert not any('Заявка отправлена мастеру' in text for text in texts)
+
+
+def test_successful_delivery_is_marked_delivered(monkeypatch):
+    mark_calls = []
+    summary, user_data = prepare(monkeypatch, [], mark_calls=mark_calls)
+    uid = 7003
+    user_data[uid] = make_data()
+
+    summary.confirm_order(make_call(uid))
+
+    assert mark_calls == [(1, 'delivered', None)]
+
+
+def test_document_failure_marks_delivery_failed(monkeypatch):
+    mark_calls = []
+    summary, user_data = prepare(monkeypatch, [], mark_calls=mark_calls)
+    uid = 7004
+    user_data[uid] = make_data()
+    monkeypatch.setattr(
+        summary.bot, 'send_document',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError('network unavailable')))
+
+    summary.confirm_order(make_call(uid))
+
+    assert len(mark_calls) == 1
+    order_id, status, error = mark_calls[0]
+    assert order_id == 1
+    assert status == 'failed'
+    assert 'network unavailable' in error

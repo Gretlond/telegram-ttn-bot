@@ -133,7 +133,8 @@ def confirm_order(call):
         last_orders[user_id]['last_order_ids'] = order_ids
         save_last_orders()
 
-        sent_count = 0
+        delivered_ids = []
+        failed_ids = []
         send_errors = []
         for m_id, oid in created:
             master_text = summary + f"\n🆔 *Заявка №{oid}*"
@@ -143,21 +144,39 @@ def confirm_order(call):
                 bot.send_message(m_id, "📄 Документ:")
                 with open(merged_path, 'rb') as f:
                     bot.send_document(m_id, f, caption=f"📄 Заявка №{oid}")
-                sent_count += 1
             except Exception as e:
                 print(f"Ошибка отправки мастеру {m_id}: {e}")
+                failed_ids.append(oid)
                 send_errors.append(f"мастер {m_id}, заявка №{oid}: {e}")
+                try:
+                    orders_db.mark_order_delivery(oid, 'failed', str(e))
+                except Exception as status_error:
+                    print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+                continue
 
-        if save_errors or send_errors or sent_count < len(created):
+            delivered_ids.append(oid)
+            try:
+                orders_db.mark_order_delivery(oid, 'delivered')
+            except Exception as status_error:
+                print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+
+        if save_errors or send_errors or failed_ids:
             _notify_admin_safe(
                 "⚠️ Заявка сохранена, но были ошибки доставки/сохранения:\n"
                 + "\n".join(save_errors + send_errors)
                 + f"\nЗаявки: {', '.join(map(str, order_ids))}")
 
-        if sent_count:
+        if delivered_ids and not failed_ids and not save_errors:
             bot.send_message(
                 user_id,
-                f"✅ Заявка отправлена мастеру. Номер: {', '.join(map(str, order_ids))}")
+                f"✅ Заявка отправлена мастеру. Номер: {', '.join(map(str, delivered_ids))}")
+        elif delivered_ids:
+            bot.send_message(
+                user_id,
+                f"⚠️ Заявка сохранена. Доставлено мастеру: "
+                f"{', '.join(map(str, delivered_ids))}. "
+                f"Не доставлено: {', '.join(map(str, failed_ids)) or '—'}. "
+                "Администратор уведомлён.")
         else:
             bot.send_message(
                 user_id,

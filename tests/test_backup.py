@@ -36,6 +36,19 @@ def test_backup_verify_and_restore(tmp_path, monkeypatch):
     assert Path('data/units.json').exists()
 
 
+def test_cleanup_keeps_only_latest_backups(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(backup, "BACKUP_DIR", "backup")
+    monkeypatch.setattr(backup, "MAX_BACKUPS", 2)
+    for day in ("2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28"):
+        (tmp_path / "backup" / day).mkdir(parents=True)
+
+    backup.cleanup_old_backups()
+
+    remaining = sorted(p.name for p in (tmp_path / "backup").iterdir())
+    assert remaining == ["2026-10-27", "2026-10-28"]
+
+
 def test_verify_rejects_broken_database(tmp_path):
     target = tmp_path / 'broken'
     target.mkdir()

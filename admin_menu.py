@@ -3,6 +3,7 @@
 # =============================================================
 from telebot import types
 import database
+import health
 import orders_db
 from audit_format import format_events
 from config import pending_platform_cargos
@@ -132,6 +133,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
             types.InlineKeyboardButton("🚜 Грузы площадок", callback_data="adm_list_plat"),
         )
         m.add(types.InlineKeyboardButton("📋 Реквизиты ТТН", callback_data="adm_ttn_header"))
+        m.add(types.InlineKeyboardButton("🩺 Состояние бота", callback_data="adm_health"))
         m.add(types.InlineKeyboardButton("🕘 Аудит заявок", callback_data="adm_audit"))
         m.add(types.InlineKeyboardButton("⬅️ В кабинет", callback_data="master_back"))
         return m
@@ -153,6 +155,26 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         if not check(call): return
         bot.answer_callback_query(call.id)
         show_main(call.message.chat.id, call.message.message_id)
+
+    @bot.callback_query_handler(func=lambda c: c.data == 'adm_health')
+    def cb_health(call):
+        if not check(call): return
+        bot.answer_callback_query(call.id, "Проверяю...")
+        checks = health.check_masters(bot, masters_dict, database.LOCATIONS)
+        text = health.build_status_text(checks)
+        if len(text) > 3900:
+            text = text[:3900] + "\n…"
+        m = types.InlineKeyboardMarkup(row_width=1)
+        m.add(types.InlineKeyboardButton(
+            "🔄 Проверить снова", callback_data="adm_health"))
+        m.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="adm_menu"))
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=text, reply_markup=m)
+        except Exception:
+            bot.send_message(call.message.chat.id, text, reply_markup=m)
 
     @bot.callback_query_handler(func=lambda c: c.data == 'adm_ttn_header')
     def cb_adm_ttn_header(call):

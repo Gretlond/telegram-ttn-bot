@@ -18,14 +18,99 @@ import word_filler
 
 PAGE_SIZE = 8
 PENDING_FILE = os.path.join("data", "batch_print_pending.json")
+SELECTION_FILE = os.path.join("data", "batch_selection.json")
 
 _selection_state = {}
+_selection_loaded = False
 
 
 # =============================================================
 # СОСТОЯНИЕ ВЫБОРА И ОЖИДАЮЩИЕ ПАКЕТЫ
 # =============================================================
+def _load_selection_all():
+    global _selection_loaded
+    if _selection_loaded:
+        return
+    _selection_loaded = True
+    if not os.path.exists(SELECTION_FILE):
+        return
+    try:
+        with open(SELECTION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"⚠️ Не удалось прочитать выбор пакета: {e}")
+        return
+    if not isinstance(data, dict):
+        return
+    for raw_user_id, payload in data.items():
+        try:
+            user_id = int(raw_user_id)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            selected = payload.get("selected", [])
+            page = payload.get("page", 0)
+        elif isinstance(payload, list):
+            selected = payload
+            page = 0
+        else:
+            continue
+        selected_ids = []
+        for order_id in selected if isinstance(selected, list) else []:
+            try:
+                selected_ids.append(int(order_id))
+            except (TypeError, ValueError):
+                continue
+        try:
+            page = max(0, int(page))
+        except (TypeError, ValueError):
+            page = 0
+        _selection_state[user_id] = {
+            "selected": selected_ids,
+            "page": page,
+            "plan": None,
+        }
+
+
+def _save_selection_all():
+    data = {}
+    for user_id, session in _selection_state.items():
+        selected = []
+        for order_id in session.get("selected", []):
+            try:
+                selected.append(int(order_id))
+            except (TypeError, ValueError):
+                continue
+        try:
+            page = max(0, int(session.get("page", 0)))
+        except (TypeError, ValueError):
+            page = 0
+        if selected or page:
+            data[str(int(user_id))] = {
+                "selected": selected,
+                "page": page,
+            }
+    try:
+        folder = os.path.dirname(os.path.abspath(SELECTION_FILE))
+        os.makedirs(folder, exist_ok=True)
+        tmp = SELECTION_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SELECTION_FILE)
+    except Exception as e:
+        print(f"⚠️ Не удалось сохранить выбор пакета: {e}")
+
+
+def _reset_selection_cache():
+    """Сбрасывает кэш (используется тестами и обслуживанием)."""
+    global _selection_loaded
+    _selection_state.clear()
+    _selection_loaded = False
+
+
 def _session(user_id):
+    if not _selection_loaded:
+        _load_selection_all()
     return _selection_state.setdefault(
         int(user_id), {"selected": [], "page": 0, "plan": None}
     )
@@ -149,10 +234,13 @@ def render_batch_menu(user_id, message_id=None, notice=None):
     session = _session(user_id)
     available = _available_orders(user_id)
     available_ids = {order["id"] for order in available}
-    session["selected"] = [
+    cleaned_selection = [
         order_id for order_id in session.get("selected", [])
         if order_id in available_ids
     ]
+    if cleaned_selection != session.get("selected", []):
+        session["selected"] = cleaned_selection
+        _save_selection_all()
     selected = session["selected"]
     active = _active_batch_info(user_id)
     free = active["free"] if active else orders_db.BATCH_SIZE
@@ -248,6 +336,7 @@ def batch_page(call):
         bot.answer_callback_query(call.id, "Неверная страница.")
         return
     _session(user_id)["page"] = max(0, page)
+    _save_selection_all()
     bot.answer_callback_query(call.id)
     render_batch_menu(user_id, call.message.message_id)
 
@@ -281,6 +370,7 @@ def batch_toggle(call):
             return
         selected.append(order_id)
         bot.answer_callback_query(call.id, "✅ Добавлена в пакет.")
+    _save_selection_all()
     render_batch_menu(user_id, call.message.message_id)
 
 
@@ -296,6 +386,7 @@ def batch_select_all(call):
             break
         if order_id not in selected:
             selected.append(order_id)
+    _save_selection_all()
     bot.answer_callback_query(call.id, f"Выбрано: {len(selected)}")
     render_batch_menu(user_id, call.message.message_id)
 
@@ -306,6 +397,7 @@ def batch_clear(call):
     session = _session(user_id)
     session["selected"] = []
     session["plan"] = None
+    _save_selection_all()
     bot.answer_callback_query(call.id, "Выбор очищен.")
     render_batch_menu(user_id, call.message.message_id)
 
@@ -328,6 +420,19 @@ def _make_assignments(order_ids, start_number, counter):
             "order_row": order_row,
         })
     return assignments
+
+
+def _format_plan_table(assignments):
+    """Полная таблица предпросмотра: заявка, накладная, строка, ТТН."""
+    lines = ["№   Заявка  Накладная   Стр.  ТТН"]
+    for index, assignment in enumerate(assignments, 1):
+        order = orders_db.get_order(assignment["order_id"]) or {}
+        waybill = str(order.get("waybill_number") or "—")
+        lines.append(
+            f"{index:>2}.  {assignment['order_id']:>6}  {waybill:<10}  "
+            f"{assignment['order_row']:>4}  {assignment['ttn_number']}"
+        )
+    return "```\n" + "\n".join(lines) + "\n```"
 
 
 def show_batch_plan(user_id, selected_ids, start_number, batch_id, counter, message_id=None):
@@ -356,6 +461,8 @@ def show_batch_plan(user_id, selected_ids, start_number, batch_id, counter, mess
         f"по `{last['ttn_number']}` (стр. {last['order_row']})\n"
         f"В каждом файле: {pages} страниц "
         f"({len(assignments)} × {batch_word.COPIES_PER_TTN} экз.)\n\n"
+        "📋 *Полный предпросмотр:*\n"
+        f"{_format_plan_table(assignments)}\n\n"
         "Будут созданы два Word-файла: передние и задние стороны. "
         "Один номер ТТН — один комплект из 4 экземпляров.\n\n"
         "Партия останется открытой, если не заполнится до 25 заявок."
@@ -574,6 +681,7 @@ def batch_generate(call):
 
     _session(user_id)["plan"] = None
     _session(user_id)["selected"] = []
+    _save_selection_all()
     try:
         _send_batch_files(user_id, record)
         render_pending(user_id, status_msg.message_id)
@@ -668,6 +776,7 @@ def batch_cancel_pending(call):
         return
     _clear_pending(user_id, delete_files=True)
     _selection_state.pop(user_id, None)
+    _save_selection_all()
     bot.answer_callback_query(call.id, "Пакет отменён.")
     bot.send_message(
         user_id,
@@ -691,6 +800,7 @@ def _validate_pending_orders(user_id, record):
 def _invalidate_stale_pending(user_id, reason):
     _clear_pending(user_id, delete_files=True)
     _selection_state.pop(user_id, None)
+    _save_selection_all()
     bot.send_message(
         user_id,
         f"⚠️ {reason}\nПакет отменён, изменения в реестр не внесены. "
@@ -793,6 +903,7 @@ def batch_confirm_print(call):
     })
     _clear_pending(user_id, delete_files=False)
     _selection_state.pop(user_id, None)
+    _save_selection_all()
 
     first = assignments[0]
     last = assignments[-1]

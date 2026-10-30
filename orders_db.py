@@ -30,7 +30,8 @@ def init_db():
             total_cost REAL DEFAULT 0, total_with_vat REAL DEFAULT 0,
             created_at TEXT, printed_at TEXT, master_message_id INTEGER,
             ttn_number TEXT, batch_id INTEGER, order_row INTEGER,
-            deleted_at TEXT, deleted_by INTEGER
+            delivery_status TEXT DEFAULT 'unknown', delivery_error TEXT,
+            delivered_at TEXT, deleted_at TEXT, deleted_by INTEGER
         )
     """)
     cursor.execute("""
@@ -76,6 +77,10 @@ def init_db():
         ("ttn_number","ALTER TABLE orders ADD COLUMN ttn_number TEXT"),
         ("batch_id","ALTER TABLE orders ADD COLUMN batch_id INTEGER"),
         ("order_row","ALTER TABLE orders ADD COLUMN order_row INTEGER"),
+        ("delivery_status",
+         "ALTER TABLE orders ADD COLUMN delivery_status TEXT DEFAULT 'unknown'"),
+        ("delivery_error","ALTER TABLE orders ADD COLUMN delivery_error TEXT"),
+        ("delivered_at","ALTER TABLE orders ADD COLUMN delivered_at TEXT"),
         ("deleted_at","ALTER TABLE orders ADD COLUMN deleted_at TEXT"),
         ("deleted_by","ALTER TABLE orders ADD COLUMN deleted_by INTEGER"),
     ]:
@@ -149,8 +154,8 @@ def save_order(data, master_id, driver_id, master_message_id=None):
         (master_id, driver_id, driver_name, waybill_number, date, car_model, car_plate,
          trailer_info, loading_point, unloading_point, shipper_handed_by,
          consignee_received_by, release_allowed_by, cargo_accepted_by,
-         cargo_json, status, created_at, master_message_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
+         cargo_json, status, created_at, master_message_id, delivery_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, 'pending')
     """, (master_id, driver_id,
           data.get('driver_name',''), data.get('waybill_number',''), date_str,
           data.get('car_model',''), data.get('car_plate',''),
@@ -312,6 +317,56 @@ def set_order_status(order_id, status):
     else:
         cursor.execute("UPDATE orders SET status = ? WHERE id = ?", (status, order_id))
     conn.commit(); conn.close()
+
+
+def mark_order_delivery(order_id, status, error=None):
+    """Фиксирует доставку заявки мастеру: pending / delivered / failed."""
+    if status not in ('pending', 'delivered', 'failed'):
+        raise ValueError(f"Недопустимый статус доставки: {status}")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    error_text = (str(error)[:1000] if error else None)
+    delivered_at = now if status == 'delivered' else None
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE orders
+           SET delivery_status = ?, delivery_error = ?, delivered_at = ?
+           WHERE id = ?""",
+        (status, error_text, delivered_at, int(order_id)),
+    )
+    changed = cursor.rowcount
+    conn.commit(); conn.close()
+    if changed:
+        log_order_event(order_id, None, f'delivery_{status}', {
+            'error': error_text or '',
+        })
+    return bool(changed)
+
+
+def get_undelivered_orders(limit=30):
+    """Заявки, которые ещё не доставлены мастеру (pending/failed)."""
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        """SELECT * FROM orders
+           WHERE deleted_at IS NULL
+             AND COALESCE(delivery_status, 'unknown') IN ('pending', 'failed')
+           ORDER BY id DESC LIMIT ?""",
+        (int(limit),),
+    )
+    rows = cursor.fetchall(); conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_delivery_counts():
+    """Количество заявок по статусам доставки."""
+    conn = get_connection(); cursor = conn.cursor()
+    rows = cursor.execute(
+        """SELECT COALESCE(delivery_status, 'unknown') AS status,
+                  COUNT(*) AS count
+           FROM orders WHERE deleted_at IS NULL
+           GROUP BY COALESCE(delivery_status, 'unknown')"""
+    ).fetchall()
+    conn.close()
+    return {row['status']: int(row['count']) for row in rows}
 
 def delete_order(order_id):
     """Жёсткое удаление. Для обычных действий используйте soft_delete_order."""

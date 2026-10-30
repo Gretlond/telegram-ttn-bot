@@ -356,3 +356,49 @@ def test_batch_manual_selection_keeps_tap_order(temp_db):
 
     assert [a["order_id"] for a in assignments] == [second, first]
     assert [a["order_row"] for a in assignments] == [25, 24]
+
+
+def test_batch_plan_shows_full_preview(temp_db, tmp_path, monkeypatch):
+    import batch_print
+
+    first = temp_db.save_order(_order_data(1), master_id=500, driver_id=900)
+    second = temp_db.save_order(_order_data(2), master_id=500, driver_id=901)
+    monkeypatch.setattr(
+        batch_print, "SELECTION_FILE", str(tmp_path / "batch_selection.json"))
+    batch_print._reset_selection_cache()
+    messages = []
+    monkeypatch.setattr(
+        batch_print.bot, "send_message",
+        lambda *args, **kwargs: messages.append((args, kwargs)))
+
+    batch_print.show_batch_plan(
+        500, [first, second], "0217975", None, 0)
+
+    text = messages[0][0][1]
+    assert "Полный предпросмотр" in text
+    assert f"{first}" in text and f"{second}" in text
+    assert "WB-1" in text and "WB-2" in text
+    assert "0217975" in text and "0217974" in text
+    assert "25" in text and "24" in text
+
+
+def test_batch_toggle_persists_selection_across_restart(
+    temp_db, tmp_path, monkeypatch
+):
+    import batch_print
+
+    order_id = temp_db.save_order(
+        _order_data(1), master_id=500, driver_id=900)
+    selection_file = tmp_path / "batch_selection.json"
+    monkeypatch.setattr(batch_print, "SELECTION_FILE", str(selection_file))
+    monkeypatch.setattr(
+        batch_print, "PENDING_FILE", str(tmp_path / "pending.json"))
+    batch_print._reset_selection_cache()
+    monkeypatch.setattr(batch_print.bot, "answer_callback_query", lambda *a, **k: None)
+    monkeypatch.setattr(batch_print, "render_batch_menu", lambda *a, **k: None)
+
+    batch_print.batch_toggle(_call(500, f"batch_toggle_{order_id}"))
+
+    assert selection_file.exists()
+    batch_print._reset_selection_cache()
+    assert batch_print._session(500)["selected"] == [order_id]
