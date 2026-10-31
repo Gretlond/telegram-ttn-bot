@@ -7,8 +7,11 @@ import health
 import orders_db
 from audit_format import format_events
 from config import pending_platform_cargos
-from utils import delivery_status_ru
+from utils import delivery_status_ru, strip_driver_prefix
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 def register(bot, masters_dict, save_masters_fn, admin_id):
     admin_id = int(admin_id)
@@ -136,6 +139,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         m.add(types.InlineKeyboardButton("📋 Реквизиты ТТН", callback_data="adm_ttn_header"))
         m.add(types.InlineKeyboardButton("🩺 Состояние бота", callback_data="adm_health"))
         m.add(types.InlineKeyboardButton("📩 Доставка заявок", callback_data="adm_delivery"))
+        m.add(types.InlineKeyboardButton("👥 Доступ к заявкам", callback_data="adm_access"))
         m.add(types.InlineKeyboardButton("🕘 Аудит заявок", callback_data="adm_audit"))
         m.add(types.InlineKeyboardButton("⬅️ В кабинет", callback_data="master_back"))
         return m
@@ -321,6 +325,172 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
                 call.message.chat.id,
                 f"✅ Заявка №{order_id} повторно доставлена мастеру.")
         show_delivery(call.message.chat.id, call.message.message_id)
+
+    # =========================================================
+    # ДОСТУП МАСТЕРОВ К ЗАЯВКАМ
+    # =========================================================
+    ACCESS_LIMIT = 15
+
+    def master_label(master_id):
+        info = masters_dict.get(int(master_id)) or \
+            masters_dict.get(str(master_id)) or {}
+        return info.get('name') or f"мастер {master_id}"
+
+    def show_access_list(uid, msg_id=None):
+        orders = orders_db.get_recent_orders(limit=ACCESS_LIMIT)
+        text = "👥 *Доступ мастеров к заявкам*\n\n"
+        if not orders:
+            text += "Заявок пока нет."
+        else:
+            text += "Выберите заявку, чтобы открыть или закрыть доступ:\n\n"
+            for order in orders:
+                driver = strip_driver_prefix(
+                    order.get('driver_name', '')) or '—'
+                text += (
+                    f"• №{order['id']} • {order.get('date', '—')} • "
+                    f"{driver} • мастер: "
+                    f"{master_label(order.get('master_id'))}\n")
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for order in orders:
+            driver = strip_driver_prefix(order.get('driver_name', '')) or '—'
+            markup.add(types.InlineKeyboardButton(
+                f"№{order['id']} • {driver[:25]}",
+                callback_data=f"adm_access_order|{order['id']}"))
+        markup.add(types.InlineKeyboardButton(
+            "🔄 Обновить", callback_data="adm_access"))
+        markup.add(types.InlineKeyboardButton(
+            "⬅️ Назад", callback_data="adm_menu"))
+
+        if msg_id:
+            try:
+                bot.edit_message_text(
+                    chat_id=uid, message_id=msg_id, text=text,
+                    parse_mode='Markdown', reply_markup=markup)
+                return
+            except Exception:
+                pass
+        bot.send_message(uid, text, parse_mode='Markdown', reply_markup=markup)
+
+    def show_order_access(uid, order_id, msg_id=None):
+        order = orders_db.get_order(order_id)
+        if not order or order.get('deleted_at'):
+            bot.send_message(uid, "❌ Заявка не найдена или удалена.")
+            show_access_list(uid)
+            return
+        granted = orders_db.get_order_access(order_id)
+        driver = strip_driver_prefix(order.get('driver_name', '')) or '—'
+        text = (
+            f"👥 *Доступ к заявке №{order_id}*\n\n"
+            f"📄 Пут. лист: {order.get('waybill_number', '—')}\n"
+            f"📅 Дата: {order.get('date', '—')}\n"
+            f"👤 Водитель: {driver}\n"
+            f"🚛 {order.get('car_model', '—')} "
+            f"({order.get('car_plate', '—')})\n"
+            f"📍 {order.get('loading_point', '—')} → "
+            f"{order.get('unloading_point', '—')}\n"
+            f"👑 Владелец: {master_label(order.get('master_id'))}\n\n"
+            "Нажмите на мастера, чтобы открыть или закрыть доступ.\n"
+            "✅ — доступ открыт, ➕ — доступа нет.")
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        owner_id = int(order.get('master_id') or 0)
+        for raw_id, info in masters_dict.items():
+            try:
+                master_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if master_id == owner_id:
+                continue
+            mark = "✅" if master_id in granted else "➕"
+            name = info.get('name') or f"мастер {master_id}"
+            markup.add(types.InlineKeyboardButton(
+                f"{mark} {name}",
+                callback_data=f"adm_access_toggle|{order_id}|{master_id}"))
+        markup.add(types.InlineKeyboardButton(
+            "⬅️ К списку заявок", callback_data="adm_access"))
+
+        if msg_id:
+            try:
+                bot.edit_message_text(
+                    chat_id=uid, message_id=msg_id, text=text,
+                    parse_mode='Markdown', reply_markup=markup)
+                return
+            except Exception:
+                pass
+        bot.send_message(uid, text, parse_mode='Markdown', reply_markup=markup)
+
+    @bot.callback_query_handler(func=lambda c: c.data == 'adm_access')
+    def cb_access(call):
+        if not check(call): return
+        bot.answer_callback_query(call.id)
+        show_access_list(call.message.chat.id, call.message.message_id)
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data.startswith('adm_access_order|'))
+    def cb_access_order(call):
+        if not check(call): return
+        try:
+            order_id = int(call.data.split('|', 1)[1])
+        except (IndexError, ValueError):
+            bot.answer_callback_query(call.id, "Ошибка номера заявки.")
+            return
+        bot.answer_callback_query(call.id)
+        show_order_access(
+            call.message.chat.id, order_id, call.message.message_id)
+
+    @bot.callback_query_handler(
+        func=lambda c: c.data.startswith('adm_access_toggle|'))
+    def cb_access_toggle(call):
+        if not check(call): return
+        try:
+            _, order_id, master_id = call.data.split('|')
+            order_id, master_id = int(order_id), int(master_id)
+        except (TypeError, ValueError):
+            bot.answer_callback_query(call.id, "Ошибка данных.")
+            return
+        order = orders_db.get_order(order_id)
+        if not order or order.get('deleted_at'):
+            bot.answer_callback_query(call.id, "Заявка не найдена.")
+            return
+        if master_id == int(order.get('master_id') or 0):
+            bot.answer_callback_query(
+                call.id, "Это владелец заявки.", show_alert=True)
+            return
+
+        granted = orders_db.get_order_access(order_id)
+        admin_id_ = call.from_user.id
+        if master_id in granted:
+            orders_db.revoke_order_access(
+                order_id, master_id, revoked_by=admin_id_)
+            bot.answer_callback_query(call.id, "Доступ закрыт.")
+            try:
+                bot.send_message(
+                    master_id,
+                    f"🔒 Доступ к заявке №{order_id} закрыт администратором.")
+            except Exception:
+                pass
+        else:
+            orders_db.grant_order_access(
+                order_id, master_id, granted_by=admin_id_)
+            bot.answer_callback_query(call.id, "Доступ открыт.")
+            driver = strip_driver_prefix(
+                order.get('driver_name', '')) or '—'
+            note = (
+                f"👥 Вам открыт доступ к заявке №{order_id}\n\n"
+                f"📄 Пут. лист: {order.get('waybill_number', '—')}\n"
+                f"📅 Дата: {order.get('date', '—')}\n"
+                f"👤 Водитель: {driver}\n"
+                f"📍 {order.get('loading_point', '—')} → "
+                f"{order.get('unloading_point', '—')}\n\n"
+                "Заявка доступна в разделе «📋 Мои заявки».")
+            try:
+                bot.send_message(master_id, note)
+            except Exception as e:
+                bot.send_message(
+                    call.message.chat.id,
+                    f"⚠️ Доступ открыт, но уведомить мастера не удалось: {e}")
+        show_order_access(
+            call.message.chat.id, order_id, call.message.message_id)
 
     # =========================================================
     # АУДИТ И УДАЛЁННЫЕ ЗАЯВКИ
@@ -1231,7 +1401,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
                 try:
                     save_masters_fn()
                 except Exception as e:
-                    print(f"⚠️ {e}")
+                    logger.exception(f"⚠️ {e}")
             database.delete_location(item_id)
         elif t == 'comp':
             ok, msg = database.delete_company(item_id)
@@ -1295,4 +1465,4 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         except Exception:
             pass
 
-    print("✅ admin_menu зарегистрирован")
+    logger.info("✅ admin_menu зарегистрирован")

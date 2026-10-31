@@ -9,6 +9,9 @@ from database import (CARS, DRIVERS, TRAILERS, COMPANIES,
                       add_car, add_trailer, add_driver)
 from keyboards import get_main_keyboard
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 # =============================================================
 # СТАРТ РЕГИСТРАЦИИ
@@ -341,7 +344,7 @@ def reg_driver_submit(call):
     try:
         bot.send_message(YOUR_TELEGRAM_ID, text, parse_mode='Markdown', reply_markup=m)
     except Exception as e:
-        print(f"⚠️ Не отправить заявку мастеру: {e}")
+        logger.exception(f"⚠️ Не отправить заявку мастеру: {e}")
         bot.answer_callback_query(call.id, "⚠️ Ошибка отправки. Попробуйте позже."); return
 
     user_data[user_id].pop('reg_driver', None)
@@ -378,14 +381,14 @@ def accept_driver_reg(call):
             car_id = add_car(st['new_car']['model'],
                              st['new_car']['plate'],
                              st['new_car']['capacity'])
-            print(f"✅ Создана машина {car_id}")
+            logger.info(f"✅ Создана машина {car_id}")
         if st.get('new_trailer') is not None and st['new_trailer'].get('plate'):
             tr_id = add_trailer(st['new_trailer']['plate'])
-            print(f"✅ Создан прицеп {tr_id}")
+            logger.info(f"✅ Создан прицеп {tr_id}")
         drv_id = add_driver(st['name'], car_id, st['company_id'])
-        print(f"✅ Создан водитель {drv_id}")
+        logger.info(f"✅ Создан водитель {drv_id}")
     except Exception as e:
-        print(f"❌ Ошибка регистрации водителя: {e}")
+        logger.exception(f"❌ Ошибка регистрации водителя: {e}")
         bot.answer_callback_query(call.id, f"❌ Ошибка: {e}"); return
 
     pending_drivers.pop(driver_user_id, None)
@@ -404,7 +407,7 @@ def accept_driver_reg(call):
                          f"Нажмите «🚛 Я водитель».",
                          parse_mode='Markdown', reply_markup=get_main_keyboard())
     except Exception as e:
-        print(f"⚠️ Не уведомить водителя: {e}")
+        logger.exception(f"⚠️ Не уведомить водителя: {e}")
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('reject_driver_reg_'))

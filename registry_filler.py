@@ -10,6 +10,9 @@ from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 RESULT_FOLDER = "Результат"
 BATCH_SIZE = 25
 COMPANY_SHORT_NAME = os.environ.get("COMPANY_SHORT_NAME", "Демо-Строй")
@@ -310,7 +313,7 @@ def generate_registry_docx(orders, master_name, output_name, manual_entries=None
 
     path = os.path.join(RESULT_FOLDER, f"{output_name}.docx")
     doc.save(path)
-    print(f"✅ Реестр DOCX создан: {path}")
+    logger.info(f"✅ Реестр DOCX создан: {path}")
     return path
 
 

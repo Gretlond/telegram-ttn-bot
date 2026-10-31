@@ -10,6 +10,9 @@ import sqlite3
 import sys
 from datetime import datetime
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 BACKUP_DIR = "backup"
 MAX_BACKUPS = 30
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -55,7 +58,7 @@ def make_backup(include_env=False):
     if os.path.exists("orders.db"):
         _sqlite_backup("orders.db", os.path.join(target_dir, "orders.db"))
     else:
-        print("⚠️ orders.db не найден — копирую только JSON")
+        logger.warning("⚠️ orders.db не найден — копирую только JSON")
 
     _copy_json_tree("data", os.path.join(target_dir, "data"))
 
@@ -70,7 +73,7 @@ def make_backup(include_env=False):
         except OSError:
             pass
 
-    print(f"💾 Резервная копия создана: {target_dir}")
+    logger.info(f"💾 Резервная копия создана: {target_dir}")
     cleanup_old_backups()
     return target_dir
 
@@ -120,11 +123,11 @@ def restore_backup(source_dir, assume_yes=False):
     if errors:
         raise RuntimeError("Копия не прошла проверку: " + "; ".join(errors))
 
-    print("⚠️ Бот должен быть остановлен перед восстановлением.")
+    logger.warning("⚠️ Бот должен быть остановлен перед восстановлением.")
     if not assume_yes:
         answer = input("Введите ВОССТАНОВИТЬ для продолжения: ").strip()
         if answer != "ВОССТАНОВИТЬ":
-            print("Отменено.")
+            logger.info("Отменено.")
             return False
 
     safety_dir = os.path.join(
@@ -135,7 +138,7 @@ def restore_backup(source_dir, assume_yes=False):
     for name in ("masters.json", "last_orders.json"):
         if os.path.exists(name):
             shutil.copy2(name, os.path.join(safety_dir, name))
-    print(f"🛟 Страховочная копия: {safety_dir}")
+    logger.info(f"🛟 Страховочная копия: {safety_dir}")
 
     source_db = os.path.join(source_dir, "orders.db")
     if os.path.exists(source_db):
@@ -161,7 +164,7 @@ def restore_backup(source_dir, assume_yes=False):
         except OSError:
             pass
 
-    print(f"✅ Восстановлено из: {source_dir}")
+    logger.info(f"✅ Восстановлено из: {source_dir}")
     return True
 
 
@@ -176,9 +179,9 @@ def cleanup_old_backups():
     for old in dirs[:-MAX_BACKUPS]:
         try:
             shutil.rmtree(os.path.join(BACKUP_DIR, old))
-            print(f"🗑 Удалена старая копия: {old}")
+            logger.info(f"🗑 Удалена старая копия: {old}")
         except Exception as e:
-            print(f"⚠️ Не удалить {old}: {e}")
+            logger.exception(f"⚠️ Не удалить {old}: {e}")
 
 
 def main(argv=None):
@@ -192,9 +195,9 @@ def main(argv=None):
     if args.verify:
         errors = verify_backup(args.verify)
         if errors:
-            print("❌ Ошибка проверки: " + "; ".join(errors))
+            logger.error("❌ Ошибка проверки: " + "; ".join(errors))
             return 1
-        print(f"✅ Копия корректна: {args.verify}")
+        logger.info(f"✅ Копия корректна: {args.verify}")
         return 0
 
     if args.restore:
@@ -204,9 +207,9 @@ def main(argv=None):
     target = make_backup(include_env=args.include_env)
     errors = verify_backup(target)
     if errors:
-        print("❌ Копия создана, но проверка не прошла: " + "; ".join(errors))
+        logger.error("❌ Копия создана, но проверка не прошла: " + "; ".join(errors))
         return 1
-    print(f"✅ Проверка копии пройдена: {target}")
+    logger.info(f"✅ Проверка копии пройдена: {target}")
     return 0
 
 

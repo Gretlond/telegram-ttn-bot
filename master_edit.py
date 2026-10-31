@@ -10,6 +10,9 @@ from keyboards import get_main_keyboard
 from master_menu import show_master_menu, rebuild_word_from_order
 import orders_db
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 # =============================================================
 # /CANCEL
@@ -315,7 +318,7 @@ def medit_date_router(call):
             with open(merged, 'rb') as f:
                 bot.send_document(user_id, f, caption=f"📄 Заявка №{order_id}")
     except Exception as e:
-        print(f"Ошибка Word: {e}")
+        logger.exception(f"Ошибка Word: {e}")
     show_edit_existing_menu(user_id, order_id, call.message.message_id)
 
 
@@ -350,7 +353,7 @@ def save_medit_date_manual(message):
             with open(merged, 'rb') as f:
                 bot.send_document(user_id, f, caption=f"📄 Заявка №{order_id}")
     except Exception as e:
-        print(f"Ошибка Word: {e}")
+        logger.exception(f"Ошибка Word: {e}")
     master_edit_state.pop(user_id, None)
     show_edit_existing_menu(user_id, order_id)
 
@@ -404,7 +407,7 @@ def save_cargo_qty(message):
             with open(merged, 'rb') as f:
                 bot.send_document(user_id, f, caption=f"📄 Заявка №{order_id}")
     except Exception as e:
-        print(f"Ошибка Word: {e}")
+        logger.exception(f"Ошибка Word: {e}")
     master_edit_state.pop(user_id, None)
     show_add_cargo_menu(user_id, order_id, index)
 
@@ -427,7 +430,7 @@ def medit_equal(call):
             with open(merged, 'rb') as f:
                 bot.send_document(call.message.chat.id, f, caption=f"📄 Заявка №{order_id}")
     except Exception as e:
-        print(f"Ошибка Word: {e}")
+        logger.exception(f"Ошибка Word: {e}")
     show_add_cargo_menu(call.message.chat.id, order_id, index, call.message.message_id)
 
 
@@ -469,7 +472,7 @@ def medit_places_nav(call):
             with open(merged, 'rb') as f:
                 bot.send_document(call.message.chat.id, f, caption=f"📄 Заявка №{order_id}")
     except Exception as e:
-        print(f"Ошибка Word: {e}")
+        logger.exception(f"Ошибка Word: {e}")
     show_add_cargo_menu(call.message.chat.id, order_id, index, call.message.message_id)
 
 
@@ -518,7 +521,7 @@ def save_cargo_places(message):
             with open(merged, 'rb') as f:
                 bot.send_document(user_id, f, caption=f"📄 Заявка №{order_id}")
     except Exception as e:
-        print(f"Ошибка Word: {e}")
+        logger.exception(f"Ошибка Word: {e}")
     master_edit_state.pop(user_id, None)
     show_add_cargo_menu(user_id, order_id, index)
 
@@ -534,7 +537,7 @@ def calc_cargo_router(call):
         bot.answer_callback_query(call.id, "Ошибка данных."); return
     user_id = call.message.chat.id
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа."); return
     cargos = orders_db.get_cargos(order_id)
     if index >= len(cargos):
@@ -609,6 +612,6 @@ def save_master_vat(call):
             with open(merged, 'rb') as f:
                 bot.send_document(user_id, f, caption=f"📄 Заявка №{order_id} (обновлено)")
     except Exception as e:
-        print(f"Ошибка Word: {e}")
+        logger.exception(f"Ошибка Word: {e}")
     master_edit_state.pop(user_id, None)
     show_calc_menu(user_id, order_id, call.message.message_id)

@@ -58,6 +58,9 @@ import time
 import requests
 import health
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 def notify_backup_problems():
     """При старте сразу сообщаем администратору о проблеме автобэкапа."""
@@ -66,24 +69,24 @@ def notify_backup_problems():
         if alert:
             bot.send_message(YOUR_TELEGRAM_ID, alert)
     except Exception as e:
-        print(f"⚠️ Не удалось проверить автобэкап: {e}")
+        logger.exception(f"⚠️ Не удалось проверить автобэкап: {e}")
 
 
 if __name__ == "__main__":
-    print("Бот запущен. Нажмите Ctrl+C для остановки.")
+    logger.info("Бот запущен. Нажмите Ctrl+C для остановки.")
     notify_backup_problems()
 
     while True:
         try:
             bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
         except requests.exceptions.ConnectionError as e:
-            print(f"⚠️ Потеря связи с Telegram: {e}")
-            print("⏳ Переподключение через 10 секунд...")
+            logger.exception(f"⚠️ Потеря связи с Telegram: {e}")
+            logger.info("⏳ Переподключение через 10 секунд...")
             time.sleep(10)
         except requests.exceptions.ReadTimeout:
-            print("⚠️ Таймаут чтения. Переподключение через 5 секунд...")
+            logger.warning("⚠️ Таймаут чтения. Переподключение через 5 секунд...")
             time.sleep(5)
         except Exception as e:
-            print(f"⚠️ Неожиданная ошибка: {e}")
-            print("⏳ Перезапуск через 10 секунд...")
+            logger.exception(f"⚠️ Неожиданная ошибка: {e}")
+            logger.info("⏳ Перезапуск через 10 секунд...")
             time.sleep(10)

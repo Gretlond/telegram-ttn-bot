@@ -243,3 +243,20 @@ def test_ttn_header_settings_are_used_in_document(monkeypatch):
     assert body.rows[4].cells[0].text == "ОАО «Тест-Заказчик»"
     assert body.rows[5].cells[0].text == "ОАО «Тест-Отправитель»"
     assert body.rows[6].cells[0].text == "ОАО «Тест-Получатель»"
+
+
+def test_word_tipper_without_places_prints_nav():
+    import word_filler
+
+    cargo = {
+        "cargo_name": "Песок",
+        "unit": "т",
+        "cargo_qty": "20",
+        "trips": "2",
+    }
+    path, _, _ = word_filler.fill_documents(
+        {"waybill_number": "TEST-TIPPER", "cargos": [cargo]},
+        "pytest_ttn_tipper")
+
+    row = _cargo_row(Document(path), "Песок")
+    assert "нав." in row

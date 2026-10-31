@@ -13,6 +13,9 @@ from keyboards import get_main_keyboard
 from word_filler import fill_documents, convert_to_pdf
 import orders_db
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 # =============================================================
 # РОЛЬ МАСТЕРА / ВХОД
@@ -105,7 +108,7 @@ def accept_master(call):
         bot.send_message(master_id,
                          f"✅ Регистрация подтверждена!\n👤 {master['name']}\n\nОтправьте /start")
     except Exception as e:
-        print(f"Не уведомить: {e}")
+        logger.exception(f"Не уведомить: {e}")
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('reject_master_'))
@@ -180,7 +183,10 @@ def master_orders(call):
     if new_orders:
         text += "🆕 *НЕ РАСПЕЧАТАННЫЕ:*\n\n"
         for o in new_orders[:20]:
-            text += (f"*№{o['id']}* • {o['date']} • пут. {o['waybill_number']}\n"
+            driver = strip_driver_prefix(o.get('driver_name', '')) or '—'
+            shared = " 🔗" if o.get('is_shared') else ""
+            text += (f"*№{o['id']}*{shared} • {o['date']} • пут. {o['waybill_number']}\n"
+                     f"   👤 {driver}\n"
                      f"   🚛 {o['car_model']} ({o['car_plate']})\n"
                      f"   📍 {o['loading_point']} → {o['unloading_point']}\n\n")
             m.add(types.InlineKeyboardButton(
@@ -220,7 +226,10 @@ def master_history(call):
         text += "🖨 *Распечатанные:*\n\n"
         for o in printed_orders[:15]:
             ttn = o.get('ttn_number') or '—'
-            text += (f"*№{o['id']}* • {o['date']} • ТТН №{ttn}\n"
+            driver = strip_driver_prefix(o.get('driver_name', '')) or '—'
+            shared = " 🔗" if o.get('is_shared') else ""
+            text += (f"*№{o['id']}*{shared} • {o['date']} • ТТН №{ttn}\n"
+                     f"   👤 {driver}\n"
                      f"   🚛 {o['car_model']} ({o['car_plate']})\n"
                      f"   📍 {o['loading_point']} → {o['unloading_point']}\n\n")
             m.add(types.InlineKeyboardButton(f"🖨 №{o['id']} • ТТН №{ttn}",
@@ -252,16 +261,22 @@ def master_back(call):
 # =============================================================
 def render_order_card(order_id, user_id, message_id=None):
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id): return
+    if not order or not orders_db.can_access_order(order, user_id): return
     if order.get('deleted_at'): return
     cargos = orders_db.get_cargos(order_id)
     ttn = order.get('ttn_number') or ''
     ttn_line = f"📄 ТТН №`{ttn}` (стр. {order.get('order_row', '?')})\n" if ttn else ""
+    driver = strip_driver_prefix(order.get('driver_name', '')) or '—'
+    access_line = ""
+    if int(order['master_id']) != int(user_id):
+        access_line = "🔗 Доступ открыт администратором\n"
     text = (f"📋 *Заявка №{order['id']}*\n\n"
             f"📄 Путевой лист: {order['waybill_number']}\n{ttn_line}"
             f"📅 Дата: {order['date']}\n🚛 {order['car_model']} ({order['car_plate']})\n"
+            f"👤 Водитель: {driver}\n"
             f"🚚 Прицеп: {order['trailer_info']}\n📍 Погрузка: {order['loading_point']}\n"
-            f"🏁 Разгрузка: {order['unloading_point']}\n📊 Статус: {status_ru(order['status'])}\n\n")
+            f"🏁 Разгрузка: {order['unloading_point']}\n📊 Статус: {status_ru(order['status'])}\n"
+            f"{access_line}\n")
     if cargos:
         text += "📦 *Грузы:*\n"
         for i, c in enumerate(cargos, 1):
@@ -314,7 +329,7 @@ def view_order(call):
     order = orders_db.get_order(order_id)
     if not order:
         bot.answer_callback_query(call.id, "Заявка не найдена."); return
-    if int(order['master_id']) != int(user_id):
+    if not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Это не ваша заявка.", show_alert=True); return
     if order.get('deleted_at'):
         bot.answer_callback_query(
@@ -331,7 +346,7 @@ def pdf_order(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('pdf_order_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа."); return
     if order.get('deleted_at'):
         bot.answer_callback_query(call.id, "🗑 Заявка удалена."); return
@@ -367,7 +382,7 @@ def pdf_order(call):
         except Exception:
             pass
     except Exception as e:
-        print(f"❌ Ошибка pdf_order: {e}")
+        logger.exception(f"❌ Ошибка pdf_order: {e}")
         try:
             bot.edit_message_text(chat_id=user_id, message_id=status_msg.message_id,
                                   text=f"❌ Ошибка: {e}")
@@ -435,7 +450,7 @@ def del_order(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('del_order_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа."); return
     if order.get('deleted_at'):
         bot.answer_callback_query(call.id, "🗑 Заявка уже удалена."); return
@@ -461,7 +476,7 @@ def del_order_confirm(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('del_order_confirm_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа."); return
     if order.get('deleted_at'):
         bot.answer_callback_query(call.id, "Заявка уже удалена.")
@@ -482,7 +497,7 @@ def del_order_cancel(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('del_order_cancel_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа."); return
     render_order_card(order_id, user_id, call.message.message_id)
 
@@ -492,7 +507,7 @@ def order_history(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('order_history_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа."); return
     events = orders_db.get_order_events(order_id, limit=30)
     from audit_format import format_events

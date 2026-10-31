@@ -16,6 +16,9 @@ import batch_word
 import master_menu
 import word_filler
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 PAGE_SIZE = 8
 PENDING_FILE = os.path.join("data", "batch_print_pending.json")
 SELECTION_FILE = os.path.join("data", "batch_selection.json")
@@ -38,7 +41,7 @@ def _load_selection_all():
         with open(SELECTION_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
-        print(f"⚠️ Не удалось прочитать выбор пакета: {e}")
+        logger.exception(f"⚠️ Не удалось прочитать выбор пакета: {e}")
         return
     if not isinstance(data, dict):
         return
@@ -98,7 +101,7 @@ def _save_selection_all():
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, SELECTION_FILE)
     except Exception as e:
-        print(f"⚠️ Не удалось сохранить выбор пакета: {e}")
+        logger.exception(f"⚠️ Не удалось сохранить выбор пакета: {e}")
 
 
 def _reset_selection_cache():
@@ -124,7 +127,7 @@ def _load_pending_all():
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception as e:
-        print(f"⚠️ Не удалось прочитать пакет печати: {e}")
+        logger.exception(f"⚠️ Не удалось прочитать пакет печати: {e}")
         return {}
 
 
@@ -159,7 +162,7 @@ def _clear_pending(user_id, delete_files=False):
                 try:
                     os.remove(path)
                 except Exception as e:
-                    print(f"⚠️ Не удалось удалить {path}: {e}")
+                    logger.exception(f"⚠️ Не удалось удалить {path}: {e}")
 
 
 def _restore_selection_from_record(user_id, record):
@@ -360,7 +363,7 @@ def batch_toggle(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace("batch_toggle_", ""))
     order = orders_db.get_order(order_id)
-    if not order or int(order["master_id"]) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа.")
         return
     if order.get("deleted_at") or order.get("status") not in ("new", "confirmed") \
@@ -683,7 +686,7 @@ def batch_generate(call):
     try:
         record = _generate_batch(user_id, plan)
     except Exception as e:
-        print(f"❌ Ошибка пакетной печати: {e}")
+        logger.exception(f"❌ Ошибка пакетной печати: {e}")
         _session(user_id)["plan"] = None
         try:
             bot.edit_message_text(
@@ -700,7 +703,7 @@ def batch_generate(call):
         _send_batch_files(user_id, record)
         render_pending(user_id, status_msg.message_id)
     except Exception as e:
-        print(f"⚠️ Пакет создан, но файлы не отправлены: {e}")
+        logger.exception(f"⚠️ Пакет создан, но файлы не отправлены: {e}")
         try:
             bot.edit_message_text(
                 chat_id=user_id, message_id=status_msg.message_id,
@@ -805,7 +808,7 @@ def batch_cancel_pending(call):
 def _validate_pending_orders(user_id, record):
     for assignment in record.get("assignments", []):
         order = orders_db.get_order(assignment["order_id"])
-        if not order or int(order["master_id"]) != int(user_id):
+        if not order or not orders_db.can_access_order(order, user_id):
             return False, f"Заявка №{assignment['order_id']} не найдена."
         if order.get("deleted_at"):
             return False, f"Заявка №{assignment['order_id']} удалена."
@@ -877,7 +880,7 @@ def batch_confirm_print(call):
             expected_counter=expected_counter,
         )
     except Exception as e:
-        print(f"❌ Ошибка подтверждения пакета: {e}")
+        logger.exception(f"❌ Ошибка подтверждения пакета: {e}")
         if created_batch:
             try:
                 orders_db.close_batch(batch_id)
@@ -911,7 +914,7 @@ def batch_confirm_print(call):
                     f"распечатана мастером.",
                 )
             except Exception as e:
-                print(f"⚠️ Не удалось отправить уведомление водителю: {e}")
+                logger.exception(f"⚠️ Не удалось отправить уведомление водителю: {e}")
 
     orders_db.log_order_event(None, user_id, "batch_printed", {
         "batch_id": batch_id,

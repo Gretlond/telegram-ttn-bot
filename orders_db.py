@@ -6,7 +6,10 @@ import json
 import os
 from datetime import datetime
 
-DB_FILE = "orders.db"
+from log_setup import get_logger
+
+logger = get_logger(__name__)
+DB_FILE = os.environ.get("TTN_DB_FILE", "orders.db")
 BATCH_SIZE = 25
 
 def get_connection():
@@ -61,8 +64,19 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS order_access (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            master_id INTEGER NOT NULL,
+            granted_by INTEGER,
+            granted_at TEXT,
+            UNIQUE(order_id, master_id)
+        )
+    """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_order ON order_events(order_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_manual_batch ON manual_registry(master_id, batch_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_access_master ON order_access(master_id, order_id)")
     conn.commit()
 
     cursor.execute("PRAGMA table_info(orders)")
@@ -85,15 +99,15 @@ def init_db():
         ("deleted_by","ALTER TABLE orders ADD COLUMN deleted_by INTEGER"),
     ]:
         if col not in existing:
-            print(f"➕ Миграция: orders.{col}")
+            logger.info(f"➕ Миграция: orders.{col}")
             try: cursor.execute(sql); conn.commit()
-            except Exception as e: print(f"⚠️ {e}")
+            except Exception as e: logger.exception(f"⚠️ {e}")
 
     # WAL уменьшает блокировки при одновременной работе водителей и мастеров.
     try:
         cursor.execute("PRAGMA journal_mode=WAL")
     except Exception as e:
-        print(f"⚠️ Не удалось включить WAL: {e}")
+        logger.exception(f"⚠️ Не удалось включить WAL: {e}")
     conn.close()
 
 
@@ -121,7 +135,7 @@ def log_order_event(order_id, actor_id, action, details=None):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"⚠️ Не удалось записать событие аудита: {e}")
+        logger.exception(f"⚠️ Не удалось записать событие аудита: {e}")
 
 
 def get_order_events(order_id, limit=50):
@@ -171,7 +185,7 @@ def save_order(data, master_id, driver_id, master_message_id=None):
         'master_id': master_id,
         'waybill_number': data.get('waybill_number', ''),
     })
-    print(f"✅ Заявка сохранена: order_id={order_id}")
+    logger.info(f"✅ Заявка сохранена: order_id={order_id}")
     return order_id
 
 def get_order(order_id):
@@ -183,20 +197,103 @@ def get_order(order_id):
 def get_master_orders(master_id, status=None):
     master_id = int(master_id)
     conn = get_connection(); cursor = conn.cursor()
+    query = """SELECT o.*,
+                      CASE WHEN o.master_id = ? THEN 0 ELSE 1 END AS is_shared
+               FROM orders o
+               WHERE o.deleted_at IS NULL
+                 AND (o.master_id = ? OR o.id IN (
+                     SELECT order_id FROM order_access WHERE master_id = ?))"""
+    params = [master_id, master_id, master_id]
     if status:
-        cursor.execute(
-            """SELECT * FROM orders
-               WHERE master_id = ? AND status = ? AND deleted_at IS NULL
-               ORDER BY id DESC""",
-            (master_id, status))
-    else:
-        cursor.execute(
-            """SELECT * FROM orders
-               WHERE master_id = ? AND deleted_at IS NULL
-               ORDER BY id DESC""",
-            (master_id,))
+        query += " AND o.status = ?"
+        params.append(status)
+    query += " ORDER BY o.id DESC"
+    cursor.execute(query, params)
     rows = cursor.fetchall(); conn.close()
     return [dict(r) for r in rows]
+
+
+def get_recent_orders(limit=15):
+    """Последние неудалённые заявки для админских экранов."""
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        """SELECT * FROM orders
+           WHERE deleted_at IS NULL
+           ORDER BY id DESC LIMIT ?""",
+        (int(limit),))
+    rows = cursor.fetchall(); conn.close()
+    return [dict(r) for r in rows]
+
+
+def grant_order_access(order_id, master_id, granted_by=None):
+    """Открывает мастеру доступ к чужой заявке. True — если доступ новый."""
+    order = get_order(order_id)
+    if not order or order.get('deleted_at'):
+        raise ValueError("Заявка не найдена или удалена")
+    master_id = int(master_id)
+    if int(order.get('master_id') or 0) == master_id:
+        return False
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        """INSERT OR IGNORE INTO order_access
+           (order_id, master_id, granted_by, granted_at)
+           VALUES (?, ?, ?, ?)""",
+        (int(order_id), master_id,
+         int(granted_by) if granted_by is not None else None,
+         datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    changed = cursor.rowcount > 0
+    conn.commit(); conn.close()
+    if changed:
+        log_order_event(order_id, granted_by, 'access_granted',
+                        {'master_id': master_id})
+    return changed
+
+
+def revoke_order_access(order_id, master_id, revoked_by=None):
+    """Закрывает доступ мастера к заявке. True — если доступ был."""
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM order_access WHERE order_id = ? AND master_id = ?",
+        (int(order_id), int(master_id)))
+    changed = cursor.rowcount > 0
+    conn.commit(); conn.close()
+    if changed:
+        log_order_event(order_id, revoked_by, 'access_revoked',
+                        {'master_id': int(master_id)})
+    return changed
+
+
+def get_order_access(order_id):
+    """Список id мастеров, которым открыт доступ к заявке."""
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        "SELECT master_id FROM order_access WHERE order_id = ? "
+        "ORDER BY master_id", (int(order_id),))
+    rows = cursor.fetchall(); conn.close()
+    return [int(row["master_id"]) for row in rows]
+
+
+def can_access_order(order_or_id, master_id):
+    """Владелец или мастер с выданным доступом может работать с заявкой."""
+    try:
+        master_id = int(master_id)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(order_or_id, dict):
+        order = order_or_id
+    else:
+        order = get_order(order_or_id)
+    if not order or order.get('deleted_at'):
+        return False
+    if int(order.get('master_id') or 0) == master_id:
+        return True
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM order_access WHERE order_id = ? AND master_id = ?",
+        (int(order['id']), master_id))
+    found = cursor.fetchone() is not None
+    conn.close()
+    return found
 
 def get_driver_orders_current_month(driver_id):
     """Возвращает заявки водителя за текущий месяц (по дате заявки)."""
@@ -225,7 +322,7 @@ def update_order_field(order_id, field, value, actor_id=None):
                'release_allowed_by','cargo_accepted_by','ttn_number','batch_id','order_row',
                'master_message_id'}
     if field not in allowed:
-        print(f"Недопустимое поле: {field}"); return
+        logger.info(f"Недопустимое поле: {field}"); return
     conn = get_connection(); cursor = conn.cursor()
     cursor.execute(f"UPDATE orders SET {field} = ? WHERE id = ?", (value, order_id))
     conn.commit(); conn.close()
@@ -458,8 +555,72 @@ def create_batch(master_id, start_number):
                    (master_id, str(start_number), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     batch_id = cursor.lastrowid
     conn.commit(); conn.close()
-    print(f"📦 Создана пачка id={batch_id}, верхний={start_number}")
+    logger.info(f"📦 Создана пачка id={batch_id}, верхний={start_number}")
     return batch_id
+
+
+def create_batch_with_manual(master_id, start_number, entry):
+    """Создаёт пачку, в которой ручная накладная занимает строку 25.
+
+    Счётчик сразу равен 1: верхняя строка занята, поэтому следующая
+    печать начнётся со строки 24 и ТТН на единицу меньше.
+    Возвращает (batch_id, entry_id).
+    """
+    master_id = int(master_id)
+    start_number = str(start_number).strip()
+    if not start_number:
+        raise ValueError("Не указан номер верхней накладной")
+
+    entry = dict(entry or {})
+    entry.setdefault('ttn_number', start_number)
+    entry.setdefault('target_row', BATCH_SIZE)
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute(
+            "SELECT id FROM batches WHERE master_id = ? AND closed_at IS NULL",
+            (master_id,)).fetchone()
+        if active:
+            raise ValueError("У мастера уже есть активная пачка")
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor = conn.execute(
+            """INSERT INTO batches
+               (master_id, start_number, counter, started_at)
+               VALUES (?, ?, 1, ?)""",
+            (master_id, start_number, now))
+        batch_id = cursor.lastrowid
+        cursor = conn.execute(
+            """INSERT INTO manual_registry
+               (master_id, batch_id, ttn_number, date, loading_point,
+                driver_name, car_plate, target_row, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (master_id, int(batch_id), str(entry.get('ttn_number', '')),
+             entry.get('date', ''), entry.get('loading_point', ''),
+             entry.get('driver_name', ''), entry.get('car_plate', ''),
+             int(entry.get('target_row') or BATCH_SIZE), now))
+        entry_id = cursor.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    log_order_event(None, master_id, 'batch_created', {
+        'batch_id': batch_id, 'start_number': start_number,
+        'manual_entry_id': entry_id,
+    })
+    log_order_event(None, master_id, 'manual_registry_added', {
+        'batch_id': batch_id,
+        'ttn_number': entry.get('ttn_number', ''),
+        'target_row': entry.get('target_row', BATCH_SIZE),
+    })
+    logger.info(
+        f"📦 Пачка id={batch_id} открыта с ручной накладной "
+        f"ТТН №{entry.get('ttn_number')} (стр. {entry.get('target_row')})")
+    return batch_id, entry_id
 
 def increment_batch_counter(batch_id):
     conn = get_connection(); cursor = conn.cursor()
@@ -542,7 +703,14 @@ def assign_orders_to_batch(batch_id, order_ids, expected_counter=None):
             if not order:
                 raise ValueError(f"Заявка №{order_id} не найдена")
             if int(order["master_id"]) != int(batch["master_id"]):
-                raise ValueError(f"Заявка №{order_id} принадлежит другому мастеру")
+                access = conn.execute(
+                    "SELECT 1 FROM order_access "
+                    "WHERE order_id = ? AND master_id = ?",
+                    (order_id, int(batch["master_id"])),
+                ).fetchone()
+                if not access:
+                    raise ValueError(
+                        f"Заявка №{order_id} принадлежит другому мастеру")
             if order["deleted_at"]:
                 raise ValueError(f"Заявка №{order_id} удалена")
             if order["status"] not in ("new", "confirmed") or order["ttn_number"]:
@@ -552,12 +720,12 @@ def assign_orders_to_batch(batch_id, order_ids, expected_counter=None):
                 """UPDATE orders
                    SET ttn_number = ?, batch_id = ?, order_row = ?,
                        status = 'printed', printed_at = ?
-                   WHERE id = ? AND master_id = ?
+                   WHERE id = ?
                      AND deleted_at IS NULL
                      AND status IN ('new', 'confirmed')
                      AND (ttn_number IS NULL OR ttn_number = '')""",
                 (ttn_number, int(batch_id), order_row, printed_at,
-                 order_id, int(batch["master_id"])),
+                 order_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError(f"Заявка №{order_id} уже изменилась")
@@ -614,7 +782,7 @@ def recalc_batch_ttn(batch_id, new_start_number):
     cursor.execute("UPDATE batches SET start_number = ? WHERE id = ?",
                    (str(new_start_number), batch_id))
     conn.commit(); conn.close()
-    print(f"🔁 Пачка {batch_id}: ТТН пересчитаны от {new_start_number}")
+    logger.info(f"🔁 Пачка {batch_id}: ТТН пересчитаны от {new_start_number}")
 
 def reset_batch(batch_id):
     conn = get_connection(); cursor = conn.cursor()
@@ -624,7 +792,7 @@ def reset_batch(batch_id):
                       WHERE batch_id = ? AND deleted_at IS NULL""", (batch_id,))
     cursor.execute("UPDATE batches SET counter = 0 WHERE id = ?", (batch_id,))
     conn.commit(); conn.close()
-    print(f"🔄 Пачка {batch_id} сброшена")
+    logger.info(f"🔄 Пачка {batch_id} сброшена")
 
 def compute_ttn_number(start_number, offset):
     s = str(start_number).strip()
@@ -637,4 +805,4 @@ def compute_ttn_number(start_number, offset):
         return s
 
 init_db()
-print("✅ orders_db инициализирован")
+logger.info("✅ orders_db инициализирован")

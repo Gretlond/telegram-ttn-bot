@@ -6,6 +6,9 @@ import json
 import telebot
 from database import LOCATIONS
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 YOUR_TELEGRAM_ID = int(os.environ.get('YOUR_TELEGRAM_ID', '0'))
 MASTERS_FILE = os.environ.get("MASTERS_FILE", "masters.json")
@@ -32,7 +35,7 @@ def save_masters():
             json.dump({str(k): v for k, v in MASTERS.items()}, f,
                       ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"⚠️ save_masters: {e}")
+        logger.exception(f"⚠️ save_masters: {e}")
 
 def load_masters():
     data = {}
@@ -41,9 +44,9 @@ def load_masters():
             with open(MASTERS_FILE, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             data = {int(k): v for k, v in raw.items()}
-            print(f"✅ Загружено мастеров: {len(data)}")
+            logger.info(f"✅ Загружено мастеров: {len(data)}")
         except Exception as e:
-            print(f"⚠️ load_masters: {e}")
+            logger.exception(f"⚠️ load_masters: {e}")
             data = {}
     if YOUR_TELEGRAM_ID not in data:
         data[YOUR_TELEGRAM_ID] = {
@@ -61,7 +64,7 @@ def save_last_orders():
             json.dump({str(k): v for k, v in last_orders.items()}, f,
                       ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"⚠️ save_last_orders: {e}")
+        logger.exception(f"⚠️ save_last_orders: {e}")
 
 def load_last_orders():
     loaded = {}
@@ -70,9 +73,9 @@ def load_last_orders():
             with open(LAST_ORDERS_FILE, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             loaded = {int(k): v for k, v in raw.items()}
-            print(f"✅ Загружено last_orders: {len(loaded)}")
+            logger.info(f"✅ Загружено last_orders: {len(loaded)}")
         except Exception as e:
-            print(f"⚠️ load_last_orders: {e}")
+            logger.exception(f"⚠️ load_last_orders: {e}")
             loaded = {}
     last_orders.clear()
     last_orders.update(loaded)

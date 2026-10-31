@@ -19,6 +19,9 @@ from database import (COMPANIES, DRIVERS, CARS, TRAILERS, LOCATIONS,
 import orders_db
 from driver_order_ui import show_summary
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 # =============================================================
 # REPLY-КНОПКА "Я ВОДИТЕЛЬ" И РОЛЬ
@@ -585,7 +588,7 @@ def recall_confirm(call):
                     f"🗑 Водитель отозвал заявку №{order['id']} "
                     f"(путевой {order.get('waybill_number', '-')}).")
             except Exception as e:
-                print(f"⚠️ Не удалось уведомить мастера: {e}")
+                logger.exception(f"⚠️ Не удалось уведомить мастера: {e}")
 
     try:
         bot.send_message(
@@ -594,7 +597,7 @@ def recall_confirm(call):
             f"Водитель: {data.get('driver_name', '-')}\n"
             f"Путевой: {data.get('waybill_number', '-')}")
     except Exception as e:
-        print(f"⚠️ Не удалось уведомить администратора: {e}")
+        logger.exception(f"⚠️ Не удалось уведомить администратора: {e}")
 
     last_orders.setdefault(user_id, {}).pop('last_order_id', None)
     last_orders.setdefault(user_id, {}).pop('last_order_ids', None)

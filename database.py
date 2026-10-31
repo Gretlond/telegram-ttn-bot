@@ -4,6 +4,9 @@
 from db_store import load_json, save_json, ensure_data_dir, next_id, FILES
 import os
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 # Демонстрационные данные. В production используются файлы из data/,
 # которые исключены из репозитория через .gitignore.
 _DEFAULT_CARS = {
@@ -123,7 +126,7 @@ def _ensure_file(name, default):
     path = os.path.join("data", FILES[name])
     if not os.path.exists(path):
         save_json(name, default)
-        print(f"📁 Создаю {path}")
+        logger.info(f"📁 Создаю {path}")
 
 def _migrate_drivers_companies():
     if not COMPANIES or not DRIVERS: return
@@ -390,4 +393,4 @@ def delete_platform_cargo(p_id):
     del PLATFORM_CARGOS[p_id]; save_platform_cargos(); return True
 
 init_storage()
-print(f"✅ database загружена: машин={len(CARS)}, водителей={len(DRIVERS)}, ...")
+logger.info(f"✅ database загружена: машин={len(CARS)}, водителей={len(DRIVERS)}, ...")

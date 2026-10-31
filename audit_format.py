@@ -19,6 +19,8 @@ ACTION_LABELS = {
     'batch_reset': 'пачка сброшена',
     'batch_closed': 'пачка закрыта',
     'batch_created': 'пачка создана',
+    'access_granted': 'доступ к заявке открыт',
+    'access_revoked': 'доступ к заявке закрыт',
 }
 
 

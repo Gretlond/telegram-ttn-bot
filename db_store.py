@@ -4,6 +4,9 @@
 import os
 import json
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 DATA_DIR = "data"
 
 FILES = {
@@ -33,7 +36,7 @@ def load_json(name, default=None):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        print(f"⚠️ Не удалось загрузить {path}: {e}")
+        logger.exception(f"⚠️ Не удалось загрузить {path}: {e}")
         return default if default is not None else {}
 
 def save_json(name, data):
@@ -44,7 +47,7 @@ def save_json(name, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
-        print(f"⚠️ Не удалось сохранить {path}: {e}")
+        logger.exception(f"⚠️ Не удалось сохранить {path}: {e}")
         return False
 
 def next_id(prefix, existing):

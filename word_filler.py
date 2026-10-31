@@ -32,6 +32,16 @@ MONTHS_RU = {
     '10': 'октября', '11': 'ноября', '12': 'декабря',
 }
 
+
+def cargo_places_value(cargo):
+    """Места в таблице ТТН: явное значение или «нав.» для самосвала."""
+    cargo = cargo or {}
+    places = str(cargo.get('places', '') or '').strip()
+    if places:
+        return places
+    return 'нав.' if str(cargo.get('trips', '') or '').strip() else ''
+
+
 def month_to_text(month_str):
     if not month_str: return ''
     m = str(month_str).strip().zfill(2)
@@ -237,6 +247,7 @@ def fill_documents(data, output_name, output_dir=None):
                         )
                     }
                     cargo_values.update(cargo)
+                    cargo_values['places'] = cargo_places_value(cargo_values)
                     if 'si' not in cargo:
                         cargo_values['si'] = cargo.get('unit', '')
                     if 'quantity' in cargo:

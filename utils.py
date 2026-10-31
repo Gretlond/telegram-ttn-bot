@@ -4,6 +4,9 @@
 from config import bot, MASTERS, YOUR_TELEGRAM_ID
 from database import LOCATIONS
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 def safe_edit_message_text(chat_id, message_id, text, parse_mode=None, reply_markup=None):
     try:
@@ -15,7 +18,7 @@ def safe_edit_message_text(chat_id, message_id, text, parse_mode=None, reply_mar
                                   parse_mode=parse_mode)
     except Exception as e:
         if "not modified" not in str(e).lower():
-            print(f"⚠️ safe_edit: {e}")
+            logger.exception(f"⚠️ safe_edit: {e}")
 
 
 def parse_order_index(rest):
@@ -136,7 +139,7 @@ def number_to_text(number_str):
         text_fractional = _int_to_words(fractional_int, female=True)
         return f"{text_integer} целых {text_fractional} {rank}"
     except Exception as e:
-        print(f"Ошибка преобразования числа: {e}")
+        logger.exception(f"Ошибка преобразования числа: {e}")
         return str(number_str)
 
 
@@ -246,11 +249,26 @@ def places_to_text(places_str):
     return _places_words(num)
 
 
+def is_tipper_cargo(cargo):
+    """Признак груза самосвала: в нём указано число рейсов."""
+    return bool(str((cargo or {}).get('trips', '') or '').strip())
+
+
+def cargo_places_value(cargo):
+    """Места для документов: явное значение или «нав.» у самосвала."""
+    places = str((cargo or {}).get('places', '') or '').strip()
+    if places:
+        return places
+    return 'нав.' if is_tipper_cargo(cargo) else ''
+
+
 def calculate_total_places_text_master(cargos):
     has_nav = False
     numbers = []
     for c in cargos:
         p = str(c.get('places', '')).strip().lower().replace('.', '')
+        if not p and is_tipper_cargo(c):
+            p = 'нав'
         if not p:
             continue
         if p in ('нав', 'навал'):

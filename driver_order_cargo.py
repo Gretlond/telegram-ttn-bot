@@ -123,7 +123,7 @@ def handle_unit_selection(call):
         'total_mass_text': user_data[user_id].get('temp_total_mass_text', ''),
         'trips': user_data[user_id].get('temp_trips', ''),
         'quantity': user_data[user_id].get('temp_cargo_qty', ''),
-        'places': '', 'price': '', 'vat_rate': '', 'vat_cost': '',
+        'places': 'нав.', 'price': '', 'vat_rate': '', 'vat_cost': '',
         'total_cost': '', 'total_with_vat': '',
     }
     user_data[user_id].setdefault('cargos', []).append(cargo)

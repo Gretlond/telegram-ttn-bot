@@ -11,6 +11,9 @@ from master_menu import show_master_menu
 import orders_db
 import registry_filler
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 # =============================================================
 # ПЕЧАТЬ / ОТМЕНА ПЕЧАТИ
@@ -20,7 +23,7 @@ def print_order(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('print_order_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа.")
         return
     if order.get('deleted_at'):
@@ -82,7 +85,7 @@ def print_order(call):
                    f"путевой {order['waybill_number']}) распечатана мастером.")
             bot.send_message(int(driver_id), msg)
         except Exception as e:
-            print(f"⚠️ Не удалось отправить уведомление водителю: {e}")
+            logger.exception(f"⚠️ Не удалось отправить уведомление водителю: {e}")
 
     bot.answer_callback_query(call.id,
                               f"✅ Заявка №{order_id} — ТТН №{ttn} (стр. {order_row})")
@@ -98,7 +101,7 @@ def unprint_order(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('unprint_order_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа.");
         return
     orders_db.set_order_status(order_id, 'new')
@@ -118,7 +121,7 @@ def unreg_order(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('unreg_order_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа.");
         return
     if not order.get('ttn_number'):
@@ -141,8 +144,15 @@ def render_current_registry(user_id, message_id=None):
     batch = orders_db.get_active_batch(user_id)
     if not batch:
         m = types.InlineKeyboardMarkup(row_width=1)
+        m.add(types.InlineKeyboardButton(
+            "📝 Начать пачку с ручной накладной",
+            callback_data="master_registry_start_manual"))
         m.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="master_back"))
-        text = "📦 *Текущая пачка*\n\n_Нет активной пачки. Она создастся автоматически при первой печати._"
+        text = ("📦 *Текущая пачка*\n\n"
+                "_Пачка ещё не открыта._\n\n"
+                "Можно начать пачку с ручной накладной: она займёт строку 25, "
+                "а её номер станет номером сверху пачки. Следующие "
+                "распечатанные заявки пойдут со строки 24.")
         if message_id:
             safe_edit_message_text(chat_id=user_id, message_id=message_id, text=text,
                                    parse_mode='Markdown', reply_markup=m)
@@ -196,6 +206,26 @@ def render_current_registry(user_id, message_id=None):
 @bot.callback_query_handler(func=lambda c: c.data == 'master_registry')
 def show_current_registry(call):
     render_current_registry(call.message.chat.id, call.message.message_id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'master_registry_start_manual')
+def master_registry_start_manual(call):
+    user_id = call.message.chat.id
+    if orders_db.get_active_batch(user_id):
+        bot.answer_callback_query(call.id, "Пачка уже открыта.")
+        render_current_registry(user_id, call.message.message_id)
+        return
+    master_edit_state[user_id] = {
+        'action': 'manual_reg', 'step': 'ttn', 'start_batch': True,
+    }
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        user_id,
+        "📝 *Пачка с ручной накладной*\n\n"
+        "Шаг 1 из 5. Введите *номер накладной*, которая лежит сверху пачки.\n"
+        "Она займёт строку 25, а её номер станет номером сверху пачки.\n\n"
+        "Например: `0217975`\n\n_Отмена: /cancel_",
+        parse_mode='Markdown')
 
 
 @bot.callback_query_handler(func=lambda c: c.data == 'master_registry_download')
@@ -268,6 +298,24 @@ def handle_manual_reg(message):
     step = st['step']
     if step == 'ttn':
         ttn_text = text.strip()
+        if st.get('start_batch'):
+            if orders_db.get_active_batch(user_id):
+                master_edit_state.pop(user_id, None)
+                bot.send_message(user_id,
+                                 "⚠️ Появилась активная пачка. "
+                                 "Ручная накладная не добавлена.")
+                render_current_registry(user_id)
+                return
+            if not ttn_text.isdigit():
+                bot.send_message(user_id, "❌ ТТН должен быть числом. Введите снова:")
+                return
+            st['start_number'] = ttn_text
+            st['ttn_number'] = ttn_text
+            st['target_row'] = orders_db.BATCH_SIZE
+            st['step'] = 'date'
+            bot.send_message(user_id, "Шаг 2 из 5. Введите *дату* (ДД.ММ.ГГ, например 20.10.26):\n\n_Отмена: /cancel_",
+                             parse_mode='Markdown')
+            return
         batch = orders_db.get_active_batch(user_id)
         target_row = None
         if batch:
@@ -317,6 +365,44 @@ def handle_manual_reg(message):
                          parse_mode='Markdown')
     elif step == 'car':
         st['car_plate'] = text
+        if st.get('start_batch'):
+            if orders_db.get_active_batch(user_id):
+                master_edit_state.pop(user_id, None)
+                bot.send_message(user_id,
+                                 "⚠️ Появилась активная пачка. "
+                                 "Ручная накладная не добавлена.")
+                render_current_registry(user_id)
+                return
+            entry = {
+                'ttn_number': st['ttn_number'],
+                'date': st['date'],
+                'loading_point': st['loading_point'],
+                'driver_name': st['driver_name'],
+                'car_plate': st['car_plate'],
+                'target_row': orders_db.BATCH_SIZE,
+            }
+            try:
+                orders_db.create_batch_with_manual(
+                    user_id, st['start_number'], entry)
+            except Exception as e:
+                logger.exception(
+                    f"❌ Не удалось открыть пачку с ручной накладной: {e}")
+                master_edit_state.pop(user_id, None)
+                bot.send_message(
+                    user_id,
+                    f"❌ Не удалось открыть пачку: {e}\n"
+                    "Данные не сохранены. Попробуйте снова.")
+                render_current_registry(user_id)
+                return
+            master_edit_state.pop(user_id, None)
+            bot.send_message(
+                user_id,
+                f"✅ Пачка открыта с ручной накладной.\n\n"
+                f"📄 ТТН №`{st['ttn_number']}` — строка 25\n"
+                f"Следующая печать начнётся со строки 24.",
+                parse_mode='Markdown')
+            render_current_registry(user_id)
+            return
         batch_id = st.get('batch_id')
         batch = orders_db.get_active_batch(user_id)
         if not batch or (batch_id and int(batch['id']) != int(batch_id)):
@@ -432,7 +518,7 @@ def unreg_from_registry(call):
     user_id = call.message.chat.id
     order_id = int(call.data.replace('unreg_from_registry_', ''))
     order = orders_db.get_order(order_id)
-    if not order or int(order['master_id']) != int(user_id):
+    if not order or not orders_db.can_access_order(order, user_id):
         bot.answer_callback_query(call.id, "⛔ Нет доступа.");
         return
     old = order.get('ttn_number') or '?'
@@ -491,7 +577,7 @@ def _finish_batch(master_id, batch_id):
         docx_path, pdf_path = registry_filler.generate_registry(
             orders, REGISTRY_MASTER_NAME, output_name, manual)
     except Exception as e:
-        print(f"❌ Ошибка генерации реестра: {e}")
+        logger.exception(f"❌ Ошибка генерации реестра: {e}")
         bot.send_message(master_id, f"❌ Ошибка генерации реестра: {e}")
         return
 
@@ -524,7 +610,7 @@ def _finish_batch(master_id, batch_id):
                 bot.send_document(int(master_id), f,
                                   caption=f"📄 Реестр ТТН (PDF) — пачка №{batch_id}")
         except Exception as e:
-            print(f"⚠️ Не отправить PDF: {e}")
+            logger.exception(f"⚠️ Не отправить PDF: {e}")
 
     # Ручные накладные остаются в БД как история закрытой пачки.
     master_edit_state[int(master_id)] = {'action': 'waiting_batch_number_after_finish'}
@@ -584,7 +670,7 @@ def handle_batch_number_input(message):
                    f"путевой {order['waybill_number']}) распечатана мастером.")
             bot.send_message(int(driver_id), msg)
         except Exception as e:
-            print(f"⚠️ Не удалось отправить уведомление водителю: {e}")
+            logger.exception(f"⚠️ Не удалось отправить уведомление водителю: {e}")
 
     bot.send_message(user_id,
                      f"✅ Заявка №{order_id} помечена как распечатанная.\n"

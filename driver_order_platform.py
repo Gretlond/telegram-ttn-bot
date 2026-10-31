@@ -13,6 +13,9 @@ from keyboards import (get_main_keyboard, get_platform_cargos_keyboard,
 from database import PLATFORM_CATEGORIES, PLATFORM_CARGOS, UNITS
 from driver_order_ui import show_cargos_menu
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 PLATFORM_MASS_PROMPT = (
     "Введите *общую массу груза в тоннах* (например, 14.7):\n\n"
     "_Отмена: /cancel_"
@@ -127,7 +130,7 @@ def handle_p_newcat(call):
                                       message_id=msg.message_id,
                                       reply_markup=markup)
     except Exception as e:
-        print(f"⚠️ Не удалось отправить заявку на модерацию: {e}")
+        logger.exception(f"⚠️ Не удалось отправить заявку на модерацию: {e}")
 
     safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
                            text=f"Груз: *{name}*\n\n"

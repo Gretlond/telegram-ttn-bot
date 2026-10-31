@@ -33,6 +33,8 @@ os.environ["YOUR_TELEGRAM_ID"] = str(MASTER_ID)
 # Направляем их во временную папку, чтобы самопроверка не меняла production.
 os.environ["MASTERS_FILE"] = str(SELFTEST_HOME / "masters.json")
 os.environ["LAST_ORDERS_FILE"] = str(SELFTEST_HOME / "last_orders.json")
+os.environ["TTN_DB_FILE"] = str(SELFTEST_HOME / "orders.db")
+os.environ.setdefault("TTN_LOG_TO_FILE", "0")
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
@@ -203,6 +205,10 @@ def run_selftest(template, output_dir, keep_temp=False):
             and Path(config.LAST_ORDERS_FILE).resolve().is_relative_to(
                 SELFTEST_HOME.resolve()),
             "masters.json и last_orders.json не затрагивают production")
+        report.check(
+            Path(orders_db.DB_FILE).resolve().is_relative_to(
+                SELFTEST_HOME.resolve()),
+            "orders.db не затрагивает production")
         orders_db.DB_FILE = str(runtime / "orders.db")
         orders_db.init_db()
         batch_print.PENDING_FILE = str(runtime / "pending.json")

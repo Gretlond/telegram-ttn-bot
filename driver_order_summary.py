@@ -20,6 +20,9 @@ from word_filler import fill_documents
 import orders_db
 from driver_order_ui import show_summary, show_edit_cargos_list
 
+from log_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 _confirm_in_progress = set()
@@ -29,7 +32,7 @@ def _notify_admin_safe(text):
     try:
         bot.send_message(YOUR_TELEGRAM_ID, text)
     except Exception as e:
-        print(f"⚠️ Не удалось уведомить администратора: {e}")
+        logger.exception(f"⚠️ Не удалось уведомить администратора: {e}")
 
 
 def _rebuild_order_document(order_id, output_dir=None):
@@ -84,13 +87,13 @@ def resend_order_to_master(order_or_id, bot_api=None):
         try:
             orders_db.mark_order_delivery(order_id, "failed", str(e))
         except Exception as status_error:
-            print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+            logger.warning(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
         raise
     else:
         try:
             orders_db.mark_order_delivery(order_id, "delivered")
         except Exception as status_error:
-            print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+            logger.warning(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
         return order_id
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -176,7 +179,7 @@ def confirm_order(call):
             data_to_fill['cargos'] = cargos
             _, _, merged_path = fill_documents(data_to_fill, output_name)
         except Exception as e:
-            print(f"Ошибка Word: {e}")
+            logger.exception(f"Ошибка Word: {e}")
             _notify_admin_safe(f"❌ Ошибка Word при заявке водителя {user_id}: {e}")
             bot.send_message(user_id, "❌ Не удалось сформировать документ. "
                                       "Заявка НЕ отправлена. Попробуйте ещё раз.")
@@ -197,7 +200,7 @@ def confirm_order(call):
                 oid = orders_db.save_order(data, master_id=m_id, driver_id=user_id)
                 created.append((m_id, oid))
             except Exception as e:
-                print(f"Ошибка БД для мастера {m_id}: {e}")
+                logger.exception(f"Ошибка БД для мастера {m_id}: {e}")
                 save_errors.append(f"мастер {m_id}: {e}")
 
         if not created:
@@ -233,20 +236,20 @@ def confirm_order(call):
                 with open(merged_path, 'rb') as f:
                     bot.send_document(m_id, f, caption=f"📄 Заявка №{oid}")
             except Exception as e:
-                print(f"Ошибка отправки мастеру {m_id}: {e}")
+                logger.exception(f"Ошибка отправки мастеру {m_id}: {e}")
                 failed_ids.append(oid)
                 send_errors.append(f"мастер {m_id}, заявка №{oid}: {e}")
                 try:
                     orders_db.mark_order_delivery(oid, 'failed', str(e))
                 except Exception as status_error:
-                    print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+                    logger.warning(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
                 continue
 
             delivered_ids.append(oid)
             try:
                 orders_db.mark_order_delivery(oid, 'delivered')
             except Exception as status_error:
-                print(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
+                logger.warning(f"⚠️ Не удалось сохранить статус доставки: {status_error}")
 
         if save_errors or send_errors or failed_ids:
             _notify_admin_safe(
