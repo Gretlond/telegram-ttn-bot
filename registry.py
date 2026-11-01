@@ -64,16 +64,24 @@ def print_order(call):
                          "• Последняя, 25-я → ТТН №`0217951` → строка 1\n\n_Отмена: /cancel_",
                          parse_mode='Markdown')
         return
-    if int(batch['counter']) >= orders_db.BATCH_SIZE:
+    free_rows = orders_db.get_free_rows(batch['id'], user_id)
+    if not free_rows:
         bot.answer_callback_query(call.id, "📦 Пачка заполнена, закрываю...")
         _finish_batch(user_id, batch['id'])
         return
-    offset = batch['counter']
-    order_row = orders_db.BATCH_SIZE - offset
-    ttn = orders_db.compute_ttn_number(batch['start_number'], -offset)
-    new_counter = orders_db.increment_batch_counter(batch['id'])
-    orders_db.set_order_ttn(order_id, ttn, batch['id'], order_row)
-    orders_db.set_order_status(order_id, 'printed')
+
+    try:
+        assignment = orders_db.assign_orders_to_batch(
+            batch['id'], [order_id])[0]
+    except Exception as e:
+        logger.exception(f"❌ Не удалось напечатать заявку №{order_id}: {e}")
+        bot.answer_callback_query(call.id, f"❌ {e}", show_alert=True)
+        return
+
+    ttn = assignment['ttn_number']
+    order_row = assignment['order_row']
+    batch = orders_db.get_batch(batch['id'])
+    new_counter = int(batch['counter']) if batch else 0
     orders_db.log_order_event(order_id, user_id, 'printed', {
         'ttn_number': ttn, 'order_row': order_row, 'batch_id': batch['id'],
     })
@@ -325,6 +333,14 @@ def handle_manual_reg(message):
                 offset = start_val - ttn_val
                 calc_row = orders_db.BATCH_SIZE - offset
                 if 1 <= calc_row <= orders_db.BATCH_SIZE:
+                    occupied = orders_db.get_occupied_rows(
+                        batch['id'], user_id)
+                    if calc_row in occupied:
+                        bot.send_message(
+                            user_id,
+                            f"⚠️ Строка {calc_row} уже занята в пачке. "
+                            "Введите номер другой накладной или /cancel:")
+                        return
                     target_row = calc_row
                 else:
                     bot.send_message(user_id,
@@ -411,14 +427,22 @@ def handle_manual_reg(message):
             master_edit_state.pop(user_id, None)
             render_current_registry(user_id)
             return
-        orders_db.add_manual_registry(user_id, batch['id'], {
-            'ttn_number': st['ttn_number'],
-            'date': st['date'],
-            'loading_point': st['loading_point'],
-            'driver_name': st['driver_name'],
-            'car_plate': st['car_plate'],
-            'target_row': st.get('target_row'),
-        })
+        try:
+            orders_db.add_manual_registry(user_id, batch['id'], {
+                'ttn_number': st['ttn_number'],
+                'date': st['date'],
+                'loading_point': st['loading_point'],
+                'driver_name': st['driver_name'],
+                'car_plate': st['car_plate'],
+                'target_row': st.get('target_row'),
+            })
+        except Exception as e:
+            logger.exception(f"❌ Не удалось добавить ручную накладную: {e}")
+            master_edit_state.pop(user_id, None)
+            bot.send_message(user_id,
+                             f"❌ Накладная не добавлена: {e}")
+            render_current_registry(user_id)
+            return
         master_edit_state.pop(user_id, None)
         bot.send_message(user_id, "✅ Накладная добавлена в реестр.")
         render_current_registry(user_id)
@@ -437,7 +461,8 @@ def master_registry_edit_start(call):
                      f"✏️ *Изменение номера сверху пачки*\n\n"
                      f"Текущий номер: `{batch['start_number']}`\n\n"
                      f"Введите новый номер сверху пачки (наибольший).\n"
-                     f"Все ТТН и строки реестра будут пересчитаны.\n\n"
+                     f"ТТН заявок и ручных накладных будут пересчитаны, "
+                     f"строки реестра сохранятся.\n\n"
                      f"Например: `0218600`\n\n_Отмена: /cancel_",
                      parse_mode='Markdown')
 
@@ -465,7 +490,7 @@ def handle_edit_batch_start(message):
     orders_db.recalc_batch_ttn(batch['id'], text)
     master_edit_state.pop(user_id, None)
     bot.send_message(user_id,
-                     f"✅ Номер сверху обновлён: `{text}`.\nТТН и строки реестра пересчитаны.",
+                     f"✅ Номер сверху обновлён: `{text}`.\nТТН пересчитаны, строки сохранены.",
                      parse_mode='Markdown')
     render_current_registry(user_id)
 
@@ -656,12 +681,17 @@ def handle_batch_number_input(message):
     if not order:
         bot.send_message(user_id, "⚠️ Заказ не найден.");
         return
-    offset = batch['counter']
-    order_row = orders_db.BATCH_SIZE - offset
-    ttn = orders_db.compute_ttn_number(batch['start_number'], -offset)
-    new_counter = orders_db.increment_batch_counter(batch_id)
-    orders_db.set_order_ttn(order_id, ttn, batch_id, order_row)
-    orders_db.set_order_status(order_id, 'printed')
+    try:
+        assignment = orders_db.assign_orders_to_batch(
+            batch_id, [order_id])[0]
+    except Exception as e:
+        logger.exception(f"❌ Не удалось напечатать заявку №{order_id}: {e}")
+        bot.send_message(user_id, f"❌ Не удалось напечатать заявку: {e}")
+        return
+    ttn = assignment['ttn_number']
+    order_row = assignment['order_row']
+    batch = orders_db.get_batch(batch_id)
+    new_counter = int(batch['counter']) if batch else 0
 
     driver_id = order.get('driver_id')
     if driver_id:

@@ -210,13 +210,25 @@ def _active_batch_info(master_id):
     batch = orders_db.get_active_batch(int(master_id))
     if not batch:
         return None
-    counter = int(batch.get("counter") or 0)
+    occupied = orders_db.get_occupied_rows(batch["id"], master_id)
+    free_rows = [
+        row for row in range(orders_db.BATCH_SIZE, 0, -1)
+        if row not in occupied
+    ]
+    counter = len(occupied)
+    next_row = free_rows[0] if free_rows else None
+    next_ttn = None
+    if next_row is not None:
+        next_ttn = orders_db.compute_ttn_number(
+            batch["start_number"], -(orders_db.BATCH_SIZE - next_row))
     return {
         "batch": batch,
         "counter": counter,
-        "free": max(0, orders_db.BATCH_SIZE - counter),
-        "next_ttn": orders_db.compute_ttn_number(batch["start_number"], -counter),
-        "next_row": orders_db.BATCH_SIZE - counter,
+        "free": len(free_rows),
+        "next_ttn": next_ttn,
+        "next_row": next_row,
+        "occupied_rows": sorted(occupied, reverse=True),
+        "free_rows": free_rows,
     }
 
 
@@ -273,17 +285,34 @@ def render_batch_menu(user_id, message_id=None, notice=None):
     text += (
         f"Доступно нераспечатанных заявок: *{len(available)}*\n"
         f"Выбрано: *{len(selected)}* из {free} свободных мест\n\n"
-        "Порядок печати — порядок нажатия. Первая выбранная заявка "
-        "получит строку 25 реестра.\n"
-        "«Выделить все» выбирает от старых к новым: строка 25 — "
-        "самая старая заявка.\n\n"
     )
+    if active and active["next_row"]:
+        text += (
+            f"Порядок печати — порядок нажатия. Первая выбранная заявка "
+            f"получит следующую свободную строку {active['next_row']} "
+            f"(ТТН `{active['next_ttn']}`), следующие — ниже.\n"
+            f"«Выделить все» выбирает от старых к новым: строка "
+            f"{active['next_row']} — самая старая заявка.\n\n"
+        )
+    else:
+        text += (
+            "Порядок печати — порядок нажатия. Первая выбранная заявка "
+            "получит строку 25 реестра.\n"
+            "«Выделить все» выбирает от старых к новым: строка 25 — "
+            "самая старая заявка.\n\n"
+        )
     if active:
         text += (
             f"📦 Партия №{active['batch']['id']}: сверху `{active['batch']['start_number']}`, "
             f"занято {active['counter']}/{orders_db.BATCH_SIZE}\n"
-            f"Следующая: ТТН `{active['next_ttn']}`, строка {active['next_row']}\n\n"
         )
+        if active["next_row"]:
+            text += (
+                f"Следующая: ТТН `{active['next_ttn']}`, "
+                f"строка {active['next_row']}\n\n"
+            )
+        else:
+            text += "Свободных строк нет.\n\n"
     else:
         text += (
             "📦 Активной партии нет. Номер верхней накладной запрошу "
@@ -422,15 +451,33 @@ def batch_clear(call):
 # =============================================================
 # ПЛАН И ПОДТВЕРЖДЕНИЕ ДИАПАЗОНА
 # =============================================================
-def _make_assignments(order_ids, start_number, counter):
-    if counter + len(order_ids) > orders_db.BATCH_SIZE:
+def _make_assignments(order_ids, start_number, counter=0, occupied_rows=None):
+    """Сопоставляет заявки свободным строкам сверху вниз.
+
+    occupied_rows — снимок занятых строк (заявки + ручные накладные).
+    Если он не передан, используется старый расчёт от counter; это нужно
+    для обратной совместимости тестов и вызовов без активной пачки.
+    """
+    if occupied_rows is None:
+        occupied = {
+            orders_db.BATCH_SIZE - offset for offset in range(int(counter))
+        }
+    else:
+        occupied = {int(row) for row in occupied_rows}
+    occupied = {
+        row for row in occupied if 1 <= row <= orders_db.BATCH_SIZE
+    }
+    free_rows = [
+        row for row in range(orders_db.BATCH_SIZE, 0, -1)
+        if row not in occupied
+    ]
+    if len(free_rows) < len(order_ids):
         raise ValueError("В пачке недостаточно свободных строк")
+
     assignments = []
     for index, order_id in enumerate(order_ids):
-        offset = counter + index
-        order_row = orders_db.BATCH_SIZE - offset
-        if order_row < 1:
-            raise ValueError("Строка реестра вышла за границы")
+        order_row = free_rows[index]
+        offset = orders_db.BATCH_SIZE - order_row
         assignments.append({
             "order_id": int(order_id),
             "ttn_number": orders_db.compute_ttn_number(start_number, -offset),
@@ -452,9 +499,20 @@ def _format_plan_table(assignments):
     return "```\n" + "\n".join(lines) + "\n```"
 
 
-def show_batch_plan(user_id, selected_ids, start_number, batch_id, counter, message_id=None):
+def show_batch_plan(user_id, selected_ids, start_number, batch_id, counter,
+                    message_id=None, occupied_rows=None):
+    if occupied_rows is None:
+        if batch_id is not None:
+            occupied_rows = orders_db.get_occupied_rows(batch_id, user_id)
+        else:
+            occupied_rows = {
+                orders_db.BATCH_SIZE - offset for offset in range(int(counter))
+            }
+    occupied_snapshot = sorted({int(row) for row in occupied_rows})
     try:
-        assignments = _make_assignments(selected_ids, start_number, counter)
+        assignments = _make_assignments(
+            selected_ids, start_number, counter,
+            occupied_rows=occupied_snapshot)
     except ValueError as e:
         bot.send_message(user_id, f"❌ {e}")
         return
@@ -464,7 +522,8 @@ def show_batch_plan(user_id, selected_ids, start_number, batch_id, counter, mess
         "selected": list(selected_ids),
         "start_number": str(start_number),
         "batch_id": int(batch_id) if batch_id is not None else None,
-        "counter": int(counter),
+        "counter": len(occupied_snapshot),
+        "occupied_rows": occupied_snapshot,
         "assignments": assignments,
     }
 
@@ -532,7 +591,8 @@ def batch_build(call):
         bot.answer_callback_query(call.id)
         show_batch_plan(
             user_id, selected, active["batch"]["start_number"],
-            active["batch"]["id"], active["counter"], call.message.message_id)
+            active["batch"]["id"], active["counter"], call.message.message_id,
+            occupied_rows=active["occupied_rows"])
         return
 
     master_edit_state[user_id] = {
@@ -584,7 +644,8 @@ def handle_batch_start(message):
     if active:
         show_batch_plan(
             user_id, selected, active["batch"]["start_number"],
-            active["batch"]["id"], active["counter"])
+            active["batch"]["id"], active["counter"],
+            occupied_rows=active["occupied_rows"])
     else:
         show_batch_plan(user_id, selected, text, None, 0)
 
@@ -660,6 +721,7 @@ def _generate_batch(user_id, plan):
         "assignments": plan["assignments"],
         "batch_id": plan["batch_id"],
         "counter": plan["counter"],
+        "occupied_rows": plan.get("occupied_rows", []),
         "start_number": plan["start_number"],
         "front_path": front_path,
         "back_path": back_path,
@@ -852,32 +914,76 @@ def batch_confirm_print(call):
             return
         batch_id = orders_db.create_batch(user_id, record["start_number"])
         created_batch = True
-        expected_counter = 0
+        expected_rows = []
     else:
         if not active or int(active["id"]) != int(record["batch_id"]):
             bot.answer_callback_query(call.id, "Активная пачка изменилась.", show_alert=True)
             _invalidate_stale_pending(
                 user_id, "Активная пачка была закрыта или изменена.")
             return
-        if int(active["counter"]) != int(record["counter"]):
-            bot.answer_callback_query(call.id, "Счётчик пачки изменился.", show_alert=True)
-            _invalidate_stale_pending(
-                user_id, "После формирования пакета в пачке появились другие заявки.")
-            return
         if str(active["start_number"]) != str(record["start_number"]):
             bot.answer_callback_query(call.id, "Номер сверху пачки изменён.", show_alert=True)
             _invalidate_stale_pending(
                 user_id, "Номер сверху пачки был изменён.")
             return
+
+        current_occupied = orders_db.get_occupied_rows(active["id"], user_id)
+        plan_occupied = record.get("occupied_rows")
+        if plan_occupied is not None:
+            try:
+                plan_rows = {int(row) for row in plan_occupied}
+            except (TypeError, ValueError):
+                plan_rows = None
+            if plan_rows != current_occupied:
+                bot.answer_callback_query(call.id, "Состав пачки изменился.", show_alert=True)
+                _invalidate_stale_pending(
+                    user_id,
+                    "После формирования пакета в пачке появились или "
+                    "изменились другие строки.")
+                return
+        elif int(active["counter"]) != int(record["counter"]):
+            # Пакет старого формата: снимка строк ещё нет.
+            bot.answer_callback_query(call.id, "Счётчик пачки изменился.", show_alert=True)
+            _invalidate_stale_pending(
+                user_id, "После формирования пакета в пачке появились другие заявки.")
+            return
         batch_id = int(active["id"])
-        expected_counter = int(record["counter"])
+        expected_rows = sorted(current_occupied)
+
+    # Предпросмотр должен совпадать с текущими свободными строками:
+    # иначе старый пакет мог бы занять строки ручных накладных.
+    try:
+        fresh_assignments = _make_assignments(
+            [a["order_id"] for a in record["assignments"]],
+            record["start_number"], len(expected_rows),
+            occupied_rows=expected_rows,
+        )
+    except ValueError as e:
+        bot.answer_callback_query(call.id, "Пакет устарел.", show_alert=True)
+        _invalidate_stale_pending(user_id, str(e))
+        return
+
+    planned = [
+        (int(a["order_id"]), str(a["ttn_number"]), int(a["order_row"]))
+        for a in record["assignments"]
+    ]
+    fresh = [
+        (int(a["order_id"]), str(a["ttn_number"]), int(a["order_row"]))
+        for a in fresh_assignments
+    ]
+    if fresh != planned:
+        bot.answer_callback_query(call.id, "Предпросмотр устарел.", show_alert=True)
+        _invalidate_stale_pending(
+            user_id,
+            "Предпросмотр пакета не совпадает с текущим составом пачки.")
+        return
 
     bot.answer_callback_query(call.id, "⏳ Подтверждаю...")
     try:
         assignments = orders_db.assign_orders_to_batch(
             batch_id,
             [a["order_id"] for a in record["assignments"]],
-            expected_counter=expected_counter,
+            expected_rows=expected_rows,
         )
     except Exception as e:
         logger.exception(f"❌ Ошибка подтверждения пакета: {e}")

@@ -108,6 +108,19 @@ def init_db():
         cursor.execute("PRAGMA journal_mode=WAL")
     except Exception as e:
         logger.exception(f"⚠️ Не удалось включить WAL: {e}")
+
+    # Старые ручные накладные не увеличивали счётчик пачки. Синхронизируем
+    # его с фактически занятыми строками, чтобы предпросмотр пакета не
+    # начинался поверх уже введённых ТТН.
+    try:
+        open_batches = cursor.execute(
+            "SELECT id FROM batches WHERE closed_at IS NULL").fetchall()
+        for row in open_batches:
+            _recalc_counter(conn, int(row[0]))
+        conn.commit()
+    except Exception as e:
+        logger.exception(f"⚠️ Не удалось синхронизировать счётчики пачек: {e}")
+
     conn.close()
 
 
@@ -474,24 +487,69 @@ def delete_order(order_id):
 
 # ---------- РУЧНЫЕ НАКЛАДНЫЕ РЕЕСТРА ----------
 def add_manual_registry(master_id, batch_id, entry):
-    conn = get_connection(); cursor = conn.cursor()
-    cursor.execute(
-        """INSERT INTO manual_registry
-           (master_id, batch_id, ttn_number, date, loading_point,
-            driver_name, car_plate, target_row, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (int(master_id), int(batch_id), str(entry.get('ttn_number', '')),
-         entry.get('date', ''), entry.get('loading_point', ''),
-         entry.get('driver_name', ''), entry.get('car_plate', ''),
-         entry.get('target_row'),
-         datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-    )
-    entry_id = cursor.lastrowid
-    conn.commit(); conn.close()
+    master_id = int(master_id)
+    batch_id = int(batch_id)
+    ttn_number = str(entry.get('ttn_number', '')).strip()
+    target_row = entry.get('target_row')
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        batch = conn.execute(
+            "SELECT * FROM batches WHERE id = ? AND master_id = ?",
+            (batch_id, master_id),
+        ).fetchone()
+        if not batch:
+            raise ValueError("Пачка не найдена")
+        if batch["closed_at"]:
+            raise ValueError("Пачка уже закрыта")
+
+        if target_row is not None:
+            target_row = int(target_row)
+            if not 1 <= target_row <= BATCH_SIZE:
+                raise ValueError("Строка реестра вне диапазона 1–25")
+            if target_row in _occupied_rows(conn, batch_id, master_id):
+                raise ValueError(f"Строка {target_row} уже занята")
+        else:
+            target_row = None
+
+        if conn.execute(
+            """SELECT 1 FROM manual_registry
+               WHERE batch_id = ? AND ttn_number = ?""",
+            (batch_id, ttn_number),
+        ).fetchone():
+            raise ValueError(f"ТТН №{ttn_number} уже добавлен в пачку")
+        if conn.execute(
+            """SELECT 1 FROM orders
+               WHERE batch_id = ? AND ttn_number = ?""",
+            (batch_id, ttn_number),
+        ).fetchone():
+            raise ValueError(f"ТТН №{ttn_number} уже занят заявкой")
+
+        cursor = conn.execute(
+            """INSERT INTO manual_registry
+               (master_id, batch_id, ttn_number, date, loading_point,
+                driver_name, car_plate, target_row, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (master_id, batch_id, ttn_number,
+             entry.get('date', ''), entry.get('loading_point', ''),
+             entry.get('driver_name', ''), entry.get('car_plate', ''),
+             target_row,
+             datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        entry_id = cursor.lastrowid
+        _recalc_counter(conn, batch_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
     log_order_event(None, master_id, 'manual_registry_added', {
         'batch_id': batch_id,
-        'ttn_number': entry.get('ttn_number', ''),
-        'target_row': entry.get('target_row'),
+        'ttn_number': ttn_number,
+        'target_row': target_row,
     })
     return entry_id
 
@@ -509,34 +567,129 @@ def get_manual_registry(master_id, batch_id):
 
 
 def delete_manual_registry(entry_id, master_id=None):
-    conn = get_connection(); cursor = conn.cursor()
-    if master_id is None:
-        cursor.execute("DELETE FROM manual_registry WHERE id = ?", (int(entry_id),))
-    else:
-        cursor.execute(
-            "DELETE FROM manual_registry WHERE id = ? AND master_id = ?",
-            (int(entry_id), int(master_id)),
-        )
-    changed = cursor.rowcount
-    conn.commit(); conn.close()
-    if changed and master_id is not None:
+    entry_id = int(entry_id)
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if master_id is None:
+            row = conn.execute(
+                "SELECT batch_id FROM manual_registry WHERE id = ?",
+                (entry_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT batch_id FROM manual_registry
+                   WHERE id = ? AND master_id = ?""",
+                (entry_id, int(master_id)),
+            ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+
+        conn.execute("DELETE FROM manual_registry WHERE id = ?", (entry_id,))
+        _recalc_counter(conn, int(row["batch_id"]))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if master_id is not None:
         log_order_event(None, master_id, 'manual_registry_deleted',
                         {'entry_id': entry_id})
-    return bool(changed)
+    return True
 
 
 def clear_manual_registry(master_id, batch_id):
-    conn = get_connection(); cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM manual_registry WHERE master_id = ? AND batch_id = ?",
-        (int(master_id), int(batch_id)),
-    )
-    changed = cursor.rowcount
-    conn.commit(); conn.close()
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "DELETE FROM manual_registry WHERE master_id = ? AND batch_id = ?",
+            (int(master_id), int(batch_id)),
+        )
+        changed = cursor.rowcount
+        _recalc_counter(conn, batch_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     if changed:
         log_order_event(None, master_id, 'manual_registry_cleared',
                         {'batch_id': batch_id, 'count': changed})
     return changed
+
+
+# ---------- ЗАНЯТЫЕ СТРОКИ ПАЧКИ ----------
+def _occupied_rows(conn, batch_id, master_id=None):
+    """Строки пачки, занятые заявками и ручными накладными.
+
+    Удалённые заявки тоже считаются занятыми: их ТТН уже мог быть
+    напечатан, поэтому строку нельзя отдавать другой заявке.
+    """
+    rows = set()
+    for row in conn.execute(
+        """SELECT order_row FROM orders
+           WHERE batch_id = ? AND ttn_number IS NOT NULL
+             AND order_row IS NOT NULL""",
+        (int(batch_id),),
+    ):
+        if row[0] is not None:
+            rows.add(int(row[0]))
+
+    if master_id is None:
+        batch = conn.execute(
+            "SELECT master_id FROM batches WHERE id = ?", (int(batch_id),)
+        ).fetchone()
+        master_id = int(batch[0]) if batch else None
+
+    if master_id is not None:
+        for row in conn.execute(
+            """SELECT target_row FROM manual_registry
+               WHERE batch_id = ? AND master_id = ?
+                 AND target_row IS NOT NULL""",
+            (int(batch_id), int(master_id)),
+        ):
+            if row[0] is not None:
+                rows.add(int(row[0]))
+
+    return {row for row in rows if 1 <= row <= BATCH_SIZE}
+
+
+def get_occupied_rows(batch_id, master_id=None):
+    """Публичная обёртка: какие строки реестра уже заняты."""
+    conn = get_connection()
+    try:
+        return _occupied_rows(conn, batch_id, master_id)
+    finally:
+        conn.close()
+
+
+def get_free_rows(batch_id, master_id=None):
+    """Свободные строки пачки сверху вниз: 25, 24, ..."""
+    occupied = get_occupied_rows(batch_id, master_id)
+    return [row for row in range(BATCH_SIZE, 0, -1) if row not in occupied]
+
+
+def _recalc_counter(conn, batch_id):
+    """Счётчик = число фактически занятых строк (заявки + ручные)."""
+    counter = len(_occupied_rows(conn, batch_id))
+    conn.execute(
+        "UPDATE batches SET counter = ? WHERE id = ?", (counter, int(batch_id)))
+    return counter
+
+
+def recalc_batch_counter(batch_id):
+    conn = get_connection()
+    try:
+        counter = _recalc_counter(conn, batch_id)
+        conn.commit()
+        return counter
+    finally:
+        conn.close()
 
 # ---------- ПАЧКИ ----------
 def get_active_batch(master_id):
@@ -588,7 +741,7 @@ def create_batch_with_manual(master_id, start_number, entry):
         cursor = conn.execute(
             """INSERT INTO batches
                (master_id, start_number, counter, started_at)
-               VALUES (?, ?, 1, ?)""",
+               VALUES (?, ?, 0, ?)""",
             (master_id, start_number, now))
         batch_id = cursor.lastrowid
         cursor = conn.execute(
@@ -601,6 +754,7 @@ def create_batch_with_manual(master_id, start_number, entry):
              entry.get('driver_name', ''), entry.get('car_plate', ''),
              int(entry.get('target_row') or BATCH_SIZE), now))
         entry_id = cursor.lastrowid
+        _recalc_counter(conn, batch_id)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -659,10 +813,13 @@ def get_all_batches(master_id):
     return [dict(r) for r in rows]
 
 
-def assign_orders_to_batch(batch_id, order_ids, expected_counter=None):
+def assign_orders_to_batch(batch_id, order_ids, expected_counter=None,
+                           expected_rows=None):
     """Атомарно назначает номера ТТН и строки реестра нескольким заявкам.
 
-    Номера идут вниз от номера сверху пачки, строки реестра — с конца (25, 24...).
+    Свободные строки берутся сверху вниз (25, 24, ...), при этом уже занятые
+    заявками и ручными накладными строки пропускаются. Если передан
+    expected_rows, состав пачки должен совпасть со снимком предпросмотра.
     Если хотя бы одну заявку уже успели изменить, вся операция откатывается.
     """
     ids = [int(order_id) for order_id in order_ids]
@@ -682,17 +839,27 @@ def assign_orders_to_batch(batch_id, order_ids, expected_counter=None):
         if batch["closed_at"]:
             raise ValueError("Пачка уже закрыта")
 
-        counter = int(batch["counter"] or 0)
+        occupied = _occupied_rows(conn, batch_id, int(batch["master_id"]))
+        if expected_rows is not None:
+            expected = {int(row) for row in expected_rows}
+            if occupied != expected:
+                raise ValueError(
+                    "Состав пачки изменился. Сформируйте пакет заново.")
+        counter = len(occupied)
         if expected_counter is not None and counter != int(expected_counter):
             raise ValueError("Счётчик пачки изменился. Сформируйте пакет заново.")
-        if counter + len(ids) > BATCH_SIZE:
+
+        free_rows = [
+            row for row in range(BATCH_SIZE, 0, -1) if row not in occupied
+        ]
+        if len(free_rows) < len(ids):
             raise ValueError("В пачке недостаточно свободных строк")
 
         assignments = []
         printed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for index, order_id in enumerate(ids):
-            offset = counter + index
-            order_row = BATCH_SIZE - offset
+            order_row = free_rows[index]
+            offset = BATCH_SIZE - order_row
             ttn_number = compute_ttn_number(batch["start_number"], -offset)
 
             order = conn.execute(
@@ -737,12 +904,10 @@ def assign_orders_to_batch(batch_id, order_ids, expected_counter=None):
                 "batch_id": int(batch_id),
             })
 
-        cursor = conn.execute(
-            "UPDATE batches SET counter = counter + ? WHERE id = ? AND counter = ?",
-            (len(ids), int(batch_id), counter),
+        conn.execute(
+            "UPDATE batches SET counter = ? WHERE id = ?",
+            (counter + len(ids), int(batch_id)),
         )
-        if cursor.rowcount != 1:
-            raise ValueError("Не удалось обновить счётчик пачки")
         conn.commit()
         return assignments
     except Exception:
@@ -759,39 +924,222 @@ def set_order_ttn(order_id, ttn_number, batch_id, order_row=None):
     conn.commit(); conn.close()
 
 def unassign_order_from_batch(order_id):
-    conn = get_connection(); cursor = conn.cursor()
-    cursor.execute("""UPDATE orders
-                      SET ttn_number = NULL, batch_id = NULL, order_row = NULL,
-                          status = 'new', printed_at = NULL
-                      WHERE id = ?""", (order_id,))
-    conn.commit(); conn.close()
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT batch_id FROM orders WHERE id = ?", (int(order_id),)
+        ).fetchone()
+        batch_id = int(row["batch_id"]) if row and row["batch_id"] is not None else None
+        conn.execute("""UPDATE orders
+                        SET ttn_number = NULL, batch_id = NULL, order_row = NULL,
+                            status = 'new', printed_at = NULL
+                        WHERE id = ?""", (int(order_id),))
+        if batch_id is not None:
+            _recalc_counter(conn, batch_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 def recalc_batch_ttn(batch_id, new_start_number):
-    conn = get_connection(); cursor = conn.cursor()
-    cursor.execute(
-        """SELECT id FROM orders
-           WHERE batch_id = ? AND deleted_at IS NULL
-           ORDER BY id ASC""",
-        (batch_id,))
-    rows = cursor.fetchall()
-    for idx, row in enumerate(rows):
-        order_row = BATCH_SIZE - idx
-        ttn = compute_ttn_number(new_start_number, -idx)
-        cursor.execute("UPDATE orders SET ttn_number = ?, order_row = ? WHERE id = ?",
-                       (ttn, order_row, row['id']))
-    cursor.execute("UPDATE batches SET start_number = ? WHERE id = ?",
-                   (str(new_start_number), batch_id))
-    conn.commit(); conn.close()
-    logger.info(f"🔁 Пачка {batch_id}: ТТН пересчитаны от {new_start_number}")
+    """Пересчитывает ТТН заявок и ручных накладных, сохраняя их строки."""
+    batch_id = int(batch_id)
+    new_start_number = str(new_start_number).strip()
+    if not new_start_number:
+        raise ValueError("Не указан номер верхней накладной")
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        batch = conn.execute(
+            "SELECT id FROM batches WHERE id = ?", (batch_id,)
+        ).fetchone()
+        if not batch:
+            raise ValueError("Пачка не найдена")
+
+        for row in conn.execute(
+            """SELECT id, order_row FROM orders
+               WHERE batch_id = ? AND order_row IS NOT NULL
+                 AND ttn_number IS NOT NULL""",
+            (batch_id,),
+        ):
+            offset = BATCH_SIZE - int(row["order_row"])
+            ttn = compute_ttn_number(new_start_number, -offset)
+            conn.execute(
+                "UPDATE orders SET ttn_number = ? WHERE id = ?",
+                (ttn, row["id"]))
+
+        for row in conn.execute(
+            """SELECT id, target_row FROM manual_registry
+               WHERE batch_id = ? AND target_row IS NOT NULL""",
+            (batch_id,),
+        ):
+            offset = BATCH_SIZE - int(row["target_row"])
+            ttn = compute_ttn_number(new_start_number, -offset)
+            conn.execute(
+                "UPDATE manual_registry SET ttn_number = ? WHERE id = ?",
+                (ttn, row["id"]))
+
+        counter = _recalc_counter(conn, batch_id)
+        conn.execute(
+            "UPDATE batches SET start_number = ? WHERE id = ?",
+            (new_start_number, batch_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    logger.info(
+        f"🔁 Пачка {batch_id}: ТТН пересчитаны от {new_start_number} "
+        f"(занято строк: {counter})")
+
+def repair_batch_layout(batch_id, dry_run=False):
+    """Убирает наложения строк и ТТН внутри пачки.
+
+    Ручные накладные считаются приоритетными: их строки и номера не
+    меняются. Заявки, которые пересекаются с ручными строками или
+    дублируют ТТН, переносятся на свободные строки сверху вниз с
+    пересчётом номера от верхнего номера пачки. Остальные заявки
+    остаются на своих местах.
+    """
+    batch_id = int(batch_id)
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        batch = conn.execute(
+            "SELECT * FROM batches WHERE id = ?", (batch_id,)
+        ).fetchone()
+        if not batch:
+            raise ValueError("Пачка не найдена")
+        start_number = str(batch["start_number"]).strip()
+
+        manual = conn.execute(
+            """SELECT id, ttn_number, target_row FROM manual_registry
+               WHERE batch_id = ?
+               ORDER BY target_row DESC, id ASC""",
+            (batch_id,),
+        ).fetchall()
+        manual_rows = set()
+        manual_ttns = set()
+        for entry in manual:
+            ttn = str(entry["ttn_number"] or "").strip()
+            if ttn:
+                manual_ttns.add(ttn)
+            if entry["target_row"] is not None:
+                row = int(entry["target_row"])
+                if not 1 <= row <= BATCH_SIZE:
+                    raise ValueError(
+                        f"Ручная накладная №{ttn} имеет строку {row} вне 1–25")
+                manual_rows.add(row)
+
+        all_orders = conn.execute(
+            """SELECT id, ttn_number, order_row, deleted_at FROM orders
+               WHERE batch_id = ? AND order_row IS NOT NULL
+                 AND ttn_number IS NOT NULL
+               ORDER BY order_row DESC, id ASC""",
+            (batch_id,),
+        ).fetchall()
+
+        blocked_rows = set(manual_rows)
+        blocked_ttns = set(manual_ttns)
+        active_orders = []
+        for order in all_orders:
+            if order["deleted_at"]:
+                blocked_rows.add(int(order["order_row"]))
+                blocked_ttns.add(str(order["ttn_number"]).strip())
+            else:
+                active_orders.append(order)
+
+        kept_rows = set()
+        kept_ttns = set()
+        to_move = []
+        for order in active_orders:
+            row = int(order["order_row"])
+            ttn = str(order["ttn_number"] or "").strip()
+            if (row in blocked_rows or ttn in blocked_ttns
+                    or row in kept_rows or ttn in kept_ttns):
+                to_move.append(order)
+            else:
+                kept_rows.add(row)
+                kept_ttns.add(ttn)
+
+        free_rows = [
+            row for row in range(BATCH_SIZE, 0, -1)
+            if row not in blocked_rows and row not in kept_rows
+        ]
+        if len(free_rows) < len(to_move):
+            raise ValueError(
+                "В пачке недостаточно свободных строк для исправления")
+
+        moves = []
+        for index, order in enumerate(to_move):
+            new_row = free_rows[index]
+            new_ttn = compute_ttn_number(
+                start_number, -(BATCH_SIZE - new_row))
+            old_row = int(order["order_row"])
+            old_ttn = str(order["ttn_number"] or "").strip()
+            if old_row == new_row and old_ttn == new_ttn:
+                continue
+            moves.append({
+                "order_id": int(order["id"]),
+                "old_row": old_row,
+                "old_ttn": old_ttn,
+                "new_row": new_row,
+                "new_ttn": new_ttn,
+            })
+            if not dry_run:
+                conn.execute(
+                    """UPDATE orders SET order_row = ?, ttn_number = ?
+                       WHERE id = ?""",
+                    (new_row, new_ttn, int(order["id"])),
+                )
+
+        if dry_run:
+            conn.rollback()
+        else:
+            _recalc_counter(conn, batch_id)
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if moves and not dry_run:
+        log_order_event(None, batch["master_id"], 'batch_repaired', {
+            'batch_id': batch_id,
+            'moves': moves,
+        })
+        logger.info(
+            f"🛠 Пачка {batch_id}: исправлено наложений — {len(moves)}")
+
+    return {
+        "batch_id": batch_id,
+        "dry_run": bool(dry_run),
+        "manual_rows": sorted(manual_rows, reverse=True),
+        "moves": moves,
+    }
+
 
 def reset_batch(batch_id):
-    conn = get_connection(); cursor = conn.cursor()
-    cursor.execute("""UPDATE orders
-                      SET ttn_number = NULL, batch_id = NULL, order_row = NULL,
-                          status = 'new', printed_at = NULL
-                      WHERE batch_id = ? AND deleted_at IS NULL""", (batch_id,))
-    cursor.execute("UPDATE batches SET counter = 0 WHERE id = ?", (batch_id,))
-    conn.commit(); conn.close()
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("""UPDATE orders
+                        SET ttn_number = NULL, batch_id = NULL, order_row = NULL,
+                            status = 'new', printed_at = NULL
+                        WHERE batch_id = ? AND deleted_at IS NULL""", (int(batch_id),))
+        _recalc_counter(conn, batch_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     logger.info(f"🔄 Пачка {batch_id} сброшена")
 
 def compute_ttn_number(start_number, offset):
