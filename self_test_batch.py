@@ -212,7 +212,14 @@ def run_selftest(template, output_dir, keep_temp=False):
         orders_db.DB_FILE = str(runtime / "orders.db")
         orders_db.init_db()
         batch_print.PENDING_FILE = str(runtime / "pending.json")
-        batch_print._selection_state.clear()
+        batch_print.SELECTION_FILE = str(runtime / "selection.json")
+        batch_print._reset_selection_cache()
+        report.check(
+            Path(batch_print.PENDING_FILE).resolve().is_relative_to(
+                runtime.resolve())
+            and Path(batch_print.SELECTION_FILE).resolve().is_relative_to(
+                runtime.resolve()),
+            "Состояние предпросмотра не затрагивает production data/")
         word_filler.TEMPLATE = str(template)
         word_filler.RESULT_FOLDER = str(runtime / "Результат")
         registry_filler.RESULT_FOLDER = str(runtime / "Реестр")
