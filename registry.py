@@ -287,6 +287,8 @@ def master_registry_add_manual(call):
     bot.send_message(user_id,
                      "📝 *Добавление накладной вручную*\n\n"
                      "Шаг 1 из 5. Введите *номер ТТН* (например, `0217975`):\n\n"
+                     "Если строка с этим номером уже занята заявкой, она "
+                     "автоматически переедет на свободную строку.\n\n"
                      "_Отмена: /cancel_", parse_mode='Markdown')
 
 
@@ -333,13 +335,29 @@ def handle_manual_reg(message):
                 offset = start_val - ttn_val
                 calc_row = orders_db.BATCH_SIZE - offset
                 if 1 <= calc_row <= orders_db.BATCH_SIZE:
-                    occupied = orders_db.get_occupied_rows(
-                        batch['id'], user_id)
-                    if calc_row in occupied:
+                    manual = orders_db.get_manual_registry(
+                        user_id, batch['id'])
+                    manual_rows = {
+                        int(entry['target_row']) for entry in manual
+                        if entry.get('target_row') is not None
+                    }
+                    manual_ttns = {
+                        str(entry.get('ttn_number', '')).strip()
+                        for entry in manual
+                    }
+                    if calc_row in manual_rows:
                         bot.send_message(
                             user_id,
-                            f"⚠️ Строка {calc_row} уже занята в пачке. "
-                            "Введите номер другой накладной или /cancel:")
+                            f"⚠️ Строка {calc_row} уже занята ручной "
+                            "накладной. Введите номер другой накладной "
+                            "или /cancel:")
+                        return
+                    if ttn_text in manual_ttns:
+                        bot.send_message(
+                            user_id,
+                            f"⚠️ ТТН {ttn_text} уже введён ручной "
+                            "накладной. Введите номер другой накладной "
+                            "или /cancel:")
                         return
                     target_row = calc_row
                 else:
@@ -428,14 +446,14 @@ def handle_manual_reg(message):
             render_current_registry(user_id)
             return
         try:
-            orders_db.add_manual_registry(user_id, batch['id'], {
+            result = orders_db.add_manual_registry(user_id, batch['id'], {
                 'ttn_number': st['ttn_number'],
                 'date': st['date'],
                 'loading_point': st['loading_point'],
                 'driver_name': st['driver_name'],
                 'car_plate': st['car_plate'],
                 'target_row': st.get('target_row'),
-            })
+            }, with_details=True)
         except Exception as e:
             logger.exception(f"❌ Не удалось добавить ручную накладную: {e}")
             master_edit_state.pop(user_id, None)
@@ -444,7 +462,19 @@ def handle_manual_reg(message):
             render_current_registry(user_id)
             return
         master_edit_state.pop(user_id, None)
-        bot.send_message(user_id, "✅ Накладная добавлена в реестр.")
+        moves = result.get('moves') or []
+        message = "✅ Накладная добавлена в реестр."
+        if moves:
+            lines = [
+                f"• заявка №{move['order_id']}: стр. {move['old_row']} → "
+                f"{move['new_row']}, ТТН {move['old_ttn']} → {move['new_ttn']}"
+                for move in moves[:10]
+            ]
+            if len(moves) > 10:
+                lines.append(f"…и ещё {len(moves) - 10}")
+            message += ("\n\n🔄 Пачка автоматически перестроена:\n"
+                        + "\n".join(lines))
+        bot.send_message(user_id, message)
         render_current_registry(user_id)
 
 

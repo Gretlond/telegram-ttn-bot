@@ -20,6 +20,7 @@ ACTION_LABELS = {
     'batch_closed': 'пачка закрыта',
     'batch_created': 'пачка создана',
     'batch_repaired': 'пачка исправлена',
+    'batch_rebalanced': 'пачка перестроена под ручную накладную',
     'access_granted': 'доступ к заявке открыт',
     'access_revoked': 'доступ к заявке закрыт',
 }

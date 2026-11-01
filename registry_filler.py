@@ -224,19 +224,25 @@ def generate_registry_docx(orders, master_name, output_name, manual_entries=None
             row = me.get('target_row')
             if row and 1 <= row <= BATCH_SIZE:
                 idx = BATCH_SIZE - row
+                if slots[idx] is not None:
+                    raise ValueError(
+                        f"Строка {row} занята несколькими ручными записями")
                 slots[idx] = me
 
-    # 2. Затем ставим реальные заявки (они вытесняются, если место занято)
-    sorted_orders = sorted(orders, key=lambda x: x.get('order_row', 0))
-    for o in sorted_orders:
+    # 2. Затем ставим заявки строго на их строки. Если строка занята,
+    # это ошибка данных: молча сдвигать запись нельзя, иначе реестр
+    # перестанет совпадать с порядком печати.
+    for o in sorted(orders, key=lambda x: x.get('order_row', 0)):
         desired_row = o.get('order_row', 1)
+        if not isinstance(desired_row, int) or not 1 <= desired_row <= BATCH_SIZE:
+            raise ValueError(
+                f"Заявка №{o.get('id', '?')} имеет строку {desired_row} "
+                "вне диапазона 1–25")
         idx = BATCH_SIZE - desired_row
-        # Ищем свободное место вверх (в сторону увеличения строки)
-        while idx >= 0 and slots[idx] is not None:
-            idx -= 1
-
-        if idx >= 0:
-            slots[idx] = o
+        if slots[idx] is not None:
+            raise ValueError(
+                f"Строка {desired_row} уже занята другой записью")
+        slots[idx] = o
 
     table = doc.add_table(rows=1 + BATCH_SIZE, cols=len(COLUMNS))
     table.style = 'Table Grid'

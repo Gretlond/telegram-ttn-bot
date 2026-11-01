@@ -103,7 +103,7 @@ def test_assign_rejects_changed_occupied_rows(temp_db):
     assert temp_db.get_batch(batch_id)['counter'] == 1
 
 
-def test_manual_entry_rejects_occupied_row_and_duplicate_ttn(temp_db):
+def test_manual_entry_rejects_conflict_with_another_manual(temp_db):
     batch_id, _ = temp_db.create_batch_with_manual(
         500, '0219200', _manual('0219200', 25))
 
@@ -113,6 +113,77 @@ def test_manual_entry_rejects_occupied_row_and_duplicate_ttn(temp_db):
         temp_db.add_manual_registry(500, batch_id, _manual('0219200', 24))
 
     assert len(temp_db.get_manual_registry(500, batch_id)) == 1
+    assert temp_db.get_batch(batch_id)['counter'] == 1
+
+
+def test_manual_entry_takes_order_row_and_shifts_sequence(temp_db):
+    batch_id = temp_db.create_batch(500, '0219200')
+    first = temp_db.save_order(
+        _order_data(1), master_id=500, driver_id=901)
+    second = temp_db.save_order(
+        _order_data(2), master_id=500, driver_id=902)
+    first_assignment, second_assignment = temp_db.assign_orders_to_batch(
+        batch_id, [first, second])
+    assert (first_assignment['order_row'],
+            first_assignment['ttn_number']) == (25, '0219200')
+    assert (second_assignment['order_row'],
+            second_assignment['ttn_number']) == (24, '0219199')
+
+    result = temp_db.add_manual_registry(
+        500, batch_id, _manual('0219200', 25), with_details=True)
+
+    assert result['entry_id']
+    assert len(result['moves']) == 2
+    assert temp_db.get_order(first)['order_row'] == 24
+    assert temp_db.get_order(first)['ttn_number'] == '0219199'
+    assert temp_db.get_order(second)['order_row'] == 23
+    assert temp_db.get_order(second)['ttn_number'] == '0219198'
+
+    manual = temp_db.get_manual_registry(500, batch_id)
+    assert [(entry['target_row'], entry['ttn_number'])
+            for entry in manual] == [(25, '0219200')]
+    assert temp_db.get_batch(batch_id)['counter'] == 3
+
+    actions = [event['action'] for event in temp_db.get_recent_events(100)]
+    assert 'batch_rebalanced' in actions
+
+
+def test_manual_entry_keeps_orders_above_conflict(temp_db):
+    batch_id = temp_db.create_batch(500, '0219200')
+    order_ids = [
+        temp_db.save_order(
+            _order_data(number), master_id=500, driver_id=900 + number)
+        for number in range(1, 5)
+    ]
+    temp_db.assign_orders_to_batch(batch_id, order_ids)
+
+    result = temp_db.add_manual_registry(
+        500, batch_id, _manual('0219198', 23), with_details=True)
+
+    assert len(result['moves']) == 2
+    assert temp_db.get_order(order_ids[0])['order_row'] == 25
+    assert temp_db.get_order(order_ids[0])['ttn_number'] == '0219200'
+    assert temp_db.get_order(order_ids[1])['order_row'] == 24
+    assert temp_db.get_order(order_ids[1])['ttn_number'] == '0219199'
+    assert temp_db.get_order(order_ids[2])['order_row'] == 22
+    assert temp_db.get_order(order_ids[2])['ttn_number'] == '0219197'
+    assert temp_db.get_order(order_ids[3])['order_row'] == 21
+    assert temp_db.get_order(order_ids[3])['ttn_number'] == '0219196'
+    assert temp_db.get_batch(batch_id)['counter'] == 5
+
+
+def test_manual_entry_rejects_deleted_order_conflict(temp_db):
+    batch_id = temp_db.create_batch(500, '0219200')
+    order_id = temp_db.save_order(
+        _order_data(1), master_id=500, driver_id=900)
+    temp_db.assign_orders_to_batch(batch_id, [order_id])
+    temp_db.soft_delete_order(order_id, 500, 'test')
+
+    with pytest.raises(ValueError):
+        temp_db.add_manual_registry(
+            500, batch_id, _manual('0219200', 25))
+
+    assert temp_db.get_manual_registry(500, batch_id) == []
     assert temp_db.get_batch(batch_id)['counter'] == 1
 
 
@@ -134,21 +205,21 @@ def test_repair_batch_layout_moves_overlapping_orders(temp_db):
         temp_db.set_order_status(order_id, 'printed')
 
     preview = temp_db.repair_batch_layout(batch_id, dry_run=True)
-    assert len(preview['moves']) == 6
+    assert len(preview['moves']) == 8
     assert temp_db.get_order(flawed[0][0])['order_row'] == 24
 
     result = temp_db.repair_batch_layout(batch_id, dry_run=False)
-    assert len(result['moves']) == 6
+    assert len(result['moves']) == 8
     assert temp_db.get_batch(batch_id)['counter'] == 15
 
     assignments = {
         order['id']: (order['order_row'], order['ttn_number'])
         for order in temp_db.get_batch_orders(batch_id)
     }
-    assert assignments[flawed[0][0]] == (16, '0219191')
-    assert assignments[flawed[5][0]] == (11, '0219186')
-    assert assignments[flawed[6][0]] == (18, '0219193')
-    assert assignments[flawed[7][0]] == (17, '0219192')
+    assert assignments[flawed[0][0]] == (18, '0219193')
+    assert assignments[flawed[5][0]] == (13, '0219188')
+    assert assignments[flawed[6][0]] == (12, '0219187')
+    assert assignments[flawed[7][0]] == (11, '0219186')
 
     manual = temp_db.get_manual_registry(500, batch_id)
     manual_pairs = {(entry['target_row'], entry['ttn_number']) for entry in manual}
@@ -170,6 +241,46 @@ def test_repair_batch_layout_moves_overlapping_orders(temp_db):
         event['action'] for event in temp_db.get_recent_events(200)
     ]
     assert 'batch_repaired' in actions
+
+
+def test_repair_uses_print_event_order_not_current_rows(temp_db):
+    batch_id = _batch_with_manual_rows(temp_db)
+    order_ids = [
+        temp_db.save_order(
+            _order_data(number), master_id=500, driver_id=900 + number)
+        for number in range(1, 9)
+    ]
+    for order_id, row, ttn in zip(
+        order_ids,
+        range(24, 16, -1),
+        ('0219199', '0219198', '0219197', '0219196',
+         '0219195', '0219194', '0219193', '0219192'),
+    ):
+        temp_db.set_order_ttn(order_id, ttn, batch_id, row)
+        temp_db.set_order_status(order_id, 'printed')
+
+    # Последние две заявки были напечатаны первыми — реестр должен
+    # выстроиться по событиям печати, а не по текущим строкам.
+    print_order = order_ids[6:] + order_ids[:6]
+    for order_id in print_order:
+        order = temp_db.get_order(order_id)
+        temp_db.log_order_event(order_id, 500, 'printed', {
+            'batch_id': batch_id,
+            'ttn_number': order['ttn_number'],
+            'order_row': order['order_row'],
+        })
+
+    result = temp_db.repair_batch_layout(batch_id)
+    assert len(result['moves']) == 6
+
+    assignments = {
+        order['id']: (order['order_row'], order['ttn_number'])
+        for order in temp_db.get_batch_orders(batch_id)
+    }
+    assert assignments[order_ids[6]] == (18, '0219193')
+    assert assignments[order_ids[7]] == (17, '0219192')
+    assert assignments[order_ids[0]] == (16, '0219191')
+    assert assignments[order_ids[5]] == (11, '0219186')
 
 
 def test_recalc_start_number_updates_manual_and_order_ttns(temp_db):

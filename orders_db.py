@@ -486,11 +486,169 @@ def delete_order(order_id):
 
 
 # ---------- РУЧНЫЕ НАКЛАДНЫЕ РЕЕСТРА ----------
-def add_manual_registry(master_id, batch_id, entry):
+def _batch_print_event_ids(conn, batch_id):
+    """Возвращает id заявок → id первого события печати в этой пачке."""
+    result = {}
+    for event in conn.execute(
+        """SELECT id, order_id, details FROM order_events
+           WHERE action = 'printed' AND order_id IS NOT NULL
+           ORDER BY id ASC"""
+    ):
+        order_id = int(event["order_id"])
+        if order_id in result:
+            continue
+        try:
+            details = json.loads(event["details"]) if event["details"] else {}
+        except (TypeError, ValueError):
+            details = {}
+        try:
+            event_batch = int(details.get("batch_id"))
+        except (TypeError, ValueError):
+            continue
+        if event_batch == int(batch_id):
+            result[order_id] = int(event["id"])
+    return result
+
+
+def _rebalance_orders_in_conn(conn, batch_id, full=False):
+    """Перестраивает заявки вокруг ручных накладных.
+
+    Ручные накладные и строки удалённых заявок считаются занятыми и не
+    меняются. Заявки всегда идут в порядке фактической печати.
+
+    full=False — двигаются только заявки в зоне конфликта и ниже, поэтому
+    добавление ручной накладной не трогает записи выше.
+    full=True — вся пачка пересобирается в порядке печати; это нужно для
+    исправления уже перемешанного реестра.
+
+    Транзакцией управляет вызывающий код.
+    """
+    batch_id = int(batch_id)
+    batch = conn.execute(
+        "SELECT * FROM batches WHERE id = ?", (batch_id,)
+    ).fetchone()
+    if not batch:
+        raise ValueError("Пачка не найдена")
+    start_number = str(batch["start_number"]).strip()
+
+    manual = conn.execute(
+        """SELECT id, ttn_number, target_row FROM manual_registry
+           WHERE batch_id = ?
+           ORDER BY target_row DESC, id ASC""",
+        (batch_id,),
+    ).fetchall()
+    manual_rows = set()
+    manual_ttns = set()
+    for entry in manual:
+        ttn = str(entry["ttn_number"] or "").strip()
+        if ttn:
+            manual_ttns.add(ttn)
+        if entry["target_row"] is not None:
+            row = int(entry["target_row"])
+            if not 1 <= row <= BATCH_SIZE:
+                raise ValueError(
+                    f"Ручная накладная №{ttn} имеет строку {row} вне 1–25")
+            manual_rows.add(row)
+
+    all_orders = conn.execute(
+        """SELECT id, ttn_number, order_row, deleted_at, printed_at
+           FROM orders
+           WHERE batch_id = ? AND order_row IS NOT NULL
+             AND ttn_number IS NOT NULL""",
+        (batch_id,),
+    ).fetchall()
+
+    blocked_rows = set(manual_rows)
+    blocked_ttns = set(manual_ttns)
+    active_orders = []
+    for order in all_orders:
+        if order["deleted_at"]:
+            blocked_rows.add(int(order["order_row"]))
+            blocked_ttns.add(str(order["ttn_number"]).strip())
+        else:
+            active_orders.append(order)
+
+    print_event_ids = _batch_print_event_ids(conn, batch_id)
+
+    def sequence_key(order):
+        order_id = int(order["id"])
+        event_id = print_event_ids.get(order_id)
+        if event_id is not None:
+            # Событие печати — самый надёжный порядок, особенно когда
+            # вся пачка подтверждена в одну секунду.
+            return (0, event_id, "", order_id)
+        return (1, 0, str(order["printed_at"] or ""), order_id)
+
+    active_orders.sort(key=sequence_key)
+
+    if full:
+        cutoff = BATCH_SIZE
+        to_reflow = list(active_orders)
+    else:
+        seen_rows = set()
+        seen_ttns = set()
+        conflict_rows = []
+        for order in active_orders:
+            row = int(order["order_row"])
+            ttn = str(order["ttn_number"] or "").strip()
+            if (row in blocked_rows or ttn in blocked_ttns
+                    or row in seen_rows or ttn in seen_ttns):
+                conflict_rows.append(row)
+            seen_rows.add(row)
+            seen_ttns.add(ttn)
+        if not conflict_rows:
+            return [], manual_rows
+        cutoff = max(conflict_rows)
+        to_reflow = [
+            order for order in active_orders
+            if int(order["order_row"]) <= cutoff
+        ]
+
+    free_rows = [
+        row for row in range(cutoff, 0, -1)
+        if row not in blocked_rows
+    ]
+    if len(free_rows) < len(to_reflow):
+        raise ValueError(
+            "В пачке недостаточно свободных строк для перестройки")
+
+    moves = []
+    for index, order in enumerate(to_reflow):
+        new_row = free_rows[index]
+        new_ttn = compute_ttn_number(
+            start_number, -(BATCH_SIZE - new_row))
+        old_row = int(order["order_row"])
+        old_ttn = str(order["ttn_number"] or "").strip()
+        if old_row == new_row and old_ttn == new_ttn:
+            continue
+        moves.append({
+            "order_id": int(order["id"]),
+            "old_row": old_row,
+            "old_ttn": old_ttn,
+            "new_row": new_row,
+            "new_ttn": new_ttn,
+        })
+        conn.execute(
+            "UPDATE orders SET order_row = ?, ttn_number = ? WHERE id = ?",
+            (new_row, new_ttn, int(order["id"])),
+        )
+    return moves, manual_rows
+
+
+def add_manual_registry(master_id, batch_id, entry, with_details=False):
+    """Добавляет ручную накладную; заявки в зоне конфликта сдвигаются.
+
+    Ручная накладная имеет приоритет перед заявками: если её строка или
+    ТТН уже заняты активной заявкой, заявки в этой зоне сдвигаются ниже
+    с сохранением порядка печати и получают новые ТТН. Конфликт двух
+    ручных накладных и строки удалённых заявок по-прежнему запрещены.
+    """
     master_id = int(master_id)
     batch_id = int(batch_id)
     ttn_number = str(entry.get('ttn_number', '')).strip()
     target_row = entry.get('target_row')
+    if not ttn_number:
+        raise ValueError("Не указан номер ТТН")
 
     conn = get_connection()
     try:
@@ -508,8 +666,32 @@ def add_manual_registry(master_id, batch_id, entry):
             target_row = int(target_row)
             if not 1 <= target_row <= BATCH_SIZE:
                 raise ValueError("Строка реестра вне диапазона 1–25")
-            if target_row in _occupied_rows(conn, batch_id, master_id):
-                raise ValueError(f"Строка {target_row} уже занята")
+
+            expected_ttn = compute_ttn_number(
+                batch["start_number"], -(BATCH_SIZE - target_row))
+            if (ttn_number.isdigit()
+                    and str(batch["start_number"]).strip().isdigit()):
+                if int(ttn_number) != int(expected_ttn):
+                    raise ValueError(
+                        f"ТТН №{ttn_number} не соответствует строке "
+                        f"{target_row} (ожидается {expected_ttn})")
+                ttn_number = expected_ttn
+
+            if conn.execute(
+                """SELECT 1 FROM manual_registry
+                   WHERE batch_id = ? AND target_row = ?""",
+                (batch_id, target_row),
+            ).fetchone():
+                raise ValueError(
+                    f"Строка {target_row} уже занята ручной накладной")
+            if conn.execute(
+                """SELECT 1 FROM orders
+                   WHERE batch_id = ? AND order_row = ?
+                     AND deleted_at IS NOT NULL""",
+                (batch_id, target_row),
+            ).fetchone():
+                raise ValueError(
+                    f"Строка {target_row} занята удалённой заявкой")
         else:
             target_row = None
 
@@ -518,13 +700,16 @@ def add_manual_registry(master_id, batch_id, entry):
                WHERE batch_id = ? AND ttn_number = ?""",
             (batch_id, ttn_number),
         ).fetchone():
-            raise ValueError(f"ТТН №{ttn_number} уже добавлен в пачку")
+            raise ValueError(
+                f"ТТН №{ttn_number} уже добавлен ручной накладной")
         if conn.execute(
             """SELECT 1 FROM orders
-               WHERE batch_id = ? AND ttn_number = ?""",
+               WHERE batch_id = ? AND ttn_number = ?
+                 AND deleted_at IS NOT NULL""",
             (batch_id, ttn_number),
         ).fetchone():
-            raise ValueError(f"ТТН №{ttn_number} уже занят заявкой")
+            raise ValueError(
+                f"ТТН №{ttn_number} занят удалённой заявкой")
 
         cursor = conn.execute(
             """INSERT INTO manual_registry
@@ -538,6 +723,7 @@ def add_manual_registry(master_id, batch_id, entry):
              datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         )
         entry_id = cursor.lastrowid
+        moves, _ = _rebalance_orders_in_conn(conn, batch_id)
         _recalc_counter(conn, batch_id)
         conn.commit()
     except Exception:
@@ -551,6 +737,24 @@ def add_manual_registry(master_id, batch_id, entry):
         'ttn_number': ttn_number,
         'target_row': target_row,
     })
+    if moves:
+        log_order_event(None, master_id, 'batch_rebalanced', {
+            'batch_id': batch_id,
+            'reason': 'manual_registry_added',
+            'manual_ttn': ttn_number,
+            'manual_row': target_row,
+            'moves': moves,
+        })
+        logger.info(
+            f"🔄 Пачка {batch_id}: ручная накладная №{ttn_number} "
+            f"перестроила заявки — {len(moves)}")
+    if with_details:
+        return {
+            'entry_id': entry_id,
+            'ttn_number': ttn_number,
+            'target_row': target_row,
+            'moves': moves,
+        }
     return entry_id
 
 
@@ -998,13 +1202,12 @@ def recalc_batch_ttn(batch_id, new_start_number):
         f"(занято строк: {counter})")
 
 def repair_batch_layout(batch_id, dry_run=False):
-    """Убирает наложения строк и ТТН внутри пачки.
+    """Пересобирает пачку в порядке фактической печати.
 
     Ручные накладные считаются приоритетными: их строки и номера не
-    меняются. Заявки, которые пересекаются с ручными строками или
-    дублируют ТТН, переносятся на свободные строки сверху вниз с
-    пересчётом номера от верхнего номера пачки. Остальные заявки
-    остаются на своих местах.
+    меняются. Заявки выстраиваются в порядке событий печати и получают
+    свободные строки сверху вниз с пересчётом ТТН. Пустые строки от
+    удалённых заявок остаются зарезервированными.
     """
     batch_id = int(batch_id)
     conn = get_connection()
@@ -1015,89 +1218,9 @@ def repair_batch_layout(batch_id, dry_run=False):
         ).fetchone()
         if not batch:
             raise ValueError("Пачка не найдена")
-        start_number = str(batch["start_number"]).strip()
 
-        manual = conn.execute(
-            """SELECT id, ttn_number, target_row FROM manual_registry
-               WHERE batch_id = ?
-               ORDER BY target_row DESC, id ASC""",
-            (batch_id,),
-        ).fetchall()
-        manual_rows = set()
-        manual_ttns = set()
-        for entry in manual:
-            ttn = str(entry["ttn_number"] or "").strip()
-            if ttn:
-                manual_ttns.add(ttn)
-            if entry["target_row"] is not None:
-                row = int(entry["target_row"])
-                if not 1 <= row <= BATCH_SIZE:
-                    raise ValueError(
-                        f"Ручная накладная №{ttn} имеет строку {row} вне 1–25")
-                manual_rows.add(row)
-
-        all_orders = conn.execute(
-            """SELECT id, ttn_number, order_row, deleted_at FROM orders
-               WHERE batch_id = ? AND order_row IS NOT NULL
-                 AND ttn_number IS NOT NULL
-               ORDER BY order_row DESC, id ASC""",
-            (batch_id,),
-        ).fetchall()
-
-        blocked_rows = set(manual_rows)
-        blocked_ttns = set(manual_ttns)
-        active_orders = []
-        for order in all_orders:
-            if order["deleted_at"]:
-                blocked_rows.add(int(order["order_row"]))
-                blocked_ttns.add(str(order["ttn_number"]).strip())
-            else:
-                active_orders.append(order)
-
-        kept_rows = set()
-        kept_ttns = set()
-        to_move = []
-        for order in active_orders:
-            row = int(order["order_row"])
-            ttn = str(order["ttn_number"] or "").strip()
-            if (row in blocked_rows or ttn in blocked_ttns
-                    or row in kept_rows or ttn in kept_ttns):
-                to_move.append(order)
-            else:
-                kept_rows.add(row)
-                kept_ttns.add(ttn)
-
-        free_rows = [
-            row for row in range(BATCH_SIZE, 0, -1)
-            if row not in blocked_rows and row not in kept_rows
-        ]
-        if len(free_rows) < len(to_move):
-            raise ValueError(
-                "В пачке недостаточно свободных строк для исправления")
-
-        moves = []
-        for index, order in enumerate(to_move):
-            new_row = free_rows[index]
-            new_ttn = compute_ttn_number(
-                start_number, -(BATCH_SIZE - new_row))
-            old_row = int(order["order_row"])
-            old_ttn = str(order["ttn_number"] or "").strip()
-            if old_row == new_row and old_ttn == new_ttn:
-                continue
-            moves.append({
-                "order_id": int(order["id"]),
-                "old_row": old_row,
-                "old_ttn": old_ttn,
-                "new_row": new_row,
-                "new_ttn": new_ttn,
-            })
-            if not dry_run:
-                conn.execute(
-                    """UPDATE orders SET order_row = ?, ttn_number = ?
-                       WHERE id = ?""",
-                    (new_row, new_ttn, int(order["id"])),
-                )
-
+        moves, manual_rows = _rebalance_orders_in_conn(
+            conn, batch_id, full=True)
         if dry_run:
             conn.rollback()
         else:
@@ -1115,7 +1238,7 @@ def repair_batch_layout(batch_id, dry_run=False):
             'moves': moves,
         })
         logger.info(
-            f"🛠 Пачка {batch_id}: исправлено наложений — {len(moves)}")
+            f"🛠 Пачка {batch_id}: перестроено заявок — {len(moves)}")
 
     return {
         "batch_id": batch_id,
