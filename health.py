@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime
 
 import backup
+import batch_audit
 import orders_db
 
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -225,6 +226,13 @@ def build_status_text(master_checks, db_file=None, backup_dir=None,
                     f"верхний {batch.get('start_number')}")
         else:
             lines.append("Активные пачки: нет")
+
+    try:
+        audit = batch_audit.audit_batches()
+    except Exception as e:
+        lines.append(f"Целостность пачек: ошибка аудита ({e})")
+    else:
+        lines.append(batch_audit.format_health_summary(audit))
 
     try:
         lines.extend(_delivery_lines())

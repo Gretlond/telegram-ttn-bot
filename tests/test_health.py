@@ -116,4 +116,5 @@ def test_status_text_includes_delivery_problem_and_masters(
     assert "ошибки 1" in text
     assert f"№{order_id}" in text
     assert "✅ 500" in text
+    assert "Целостность пачек:" in text
     assert "Последний бэкап: не найден" in text
