@@ -82,6 +82,7 @@ def main(argv=None):
                 print(
                     f"\nВНИМАНИЕ: реестр не перегенерирован: {e}",
                     file=sys.stderr)
+                return 2
             else:
                 print(f"\nРеестр обновлён: {docx_path}")
                 if pdf_path:

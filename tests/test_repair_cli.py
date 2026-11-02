@@ -99,3 +99,25 @@ def test_repair_cli_registry_flag_forces_refresh_for_copy(
 
     assert code == 0
     assert calls == [batch_id]
+
+
+def test_repair_cli_returns_error_when_registry_fails(
+    temp_db, monkeypatch, capsys
+):
+    batch_id = _batch(temp_db)
+
+    def broken_regenerate(batch_id):
+        raise RuntimeError('LibreOffice не найден')
+
+    monkeypatch.setattr(
+        repair_batch.batch_registry,
+        'regenerate_batch_registry',
+        broken_regenerate,
+    )
+
+    code = repair_batch.main(['--batch', str(batch_id), '--apply'])
+
+    assert code == 2
+    error = capsys.readouterr().err
+    assert 'реестр не перегенерирован' in error
+    assert 'LibreOffice не найден' in error
