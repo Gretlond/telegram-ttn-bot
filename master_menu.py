@@ -140,6 +140,7 @@ def show_master_menu(user_id, message_id=None):
     m.add(types.InlineKeyboardButton("📋 Мои заявки", callback_data="master_orders"))
     m.add(types.InlineKeyboardButton("🖨 Пакетная печать", callback_data="batch_print_menu"))
     m.add(types.InlineKeyboardButton("📦 Текущий реестр", callback_data="master_registry"))
+    m.add(types.InlineKeyboardButton("📚 История реестров", callback_data="master_registry_history"))
     try:
         is_admin = int(user_id) == int(YOUR_TELEGRAM_ID)
     except (TypeError, ValueError):

@@ -1017,6 +1017,34 @@ def get_all_batches(master_id):
     return [dict(r) for r in rows]
 
 
+def get_closed_batches(master_id):
+    """Закрытые непустые пачки мастера для истории реестров."""
+    master_id = int(master_id)
+    conn = get_connection(); cursor = conn.cursor()
+    cursor.execute(
+        """SELECT b.*,
+                  (SELECT COUNT(*) FROM orders o
+                   WHERE o.batch_id = b.id
+                     AND o.ttn_number IS NOT NULL
+                     AND o.order_row IS NOT NULL
+                     AND o.deleted_at IS NULL) AS orders_count,
+                  (SELECT COUNT(*) FROM manual_registry m
+                   WHERE m.batch_id = b.id
+                     AND m.master_id = b.master_id) AS manual_count
+           FROM batches b
+           WHERE b.master_id = ? AND b.closed_at IS NOT NULL
+           ORDER BY b.id DESC""",
+        (master_id,),
+    )
+    rows = cursor.fetchall(); conn.close()
+    result = []
+    for row in rows:
+        batch = dict(row)
+        if batch["orders_count"] + batch["manual_count"] > 0:
+            result.append(batch)
+    return result
+
+
 def assign_orders_to_batch(batch_id, order_ids, expected_counter=None,
                            expected_rows=None):
     """Атомарно назначает номера ТТН и строки реестра нескольким заявкам.

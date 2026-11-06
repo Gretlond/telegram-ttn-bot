@@ -636,6 +636,15 @@ def _finish_batch(master_id, batch_id):
         bot.send_message(master_id, f"❌ Ошибка генерации реестра: {e}")
         return
 
+    # Сохраняем файлы в истории до закрытия пачки. Ошибка архивации
+    # не должна мешать закрытию: реестр при необходимости восстановится
+    # из базы при первом открытии истории.
+    try:
+        import registry_history
+        registry_history.archive_registry(batch_id, docx_path, pdf_path)
+    except Exception as e:
+        logger.exception(f"⚠️ Не удалось сохранить реестр в истории: {e}")
+
     # Закрываем пачку только после успешной генерации реестра.
     orders_db.close_batch(batch_id)
     orders_db.log_order_event(None, master_id, 'batch_closed', {
