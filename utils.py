@@ -3,6 +3,7 @@
 # =============================================================
 from config import bot, MASTERS, YOUR_TELEGRAM_ID
 from database import LOCATIONS
+from pricing import calculate_cargo_cost, parse_amount
 
 from log_setup import get_logger
 
@@ -164,20 +165,12 @@ def calculate_total_mass_text(cargos):
     return total_mass_str, total_mass_text
 
 
-def parse_amount(value):
-    """Безопасно приводит сумму/число из БД или анкеты к float."""
-    try:
-        return float(str(value if value is not None else '0')
-                     .replace(',', '.').replace(' ', '').strip())
-    except (ValueError, TypeError):
-        return 0.0
-
-
 def calculate_vat_totals(cargos):
     """Суммирует стоимость, НДС и стоимость с НДС по всем грузам.
 
     Сначала берутся уже рассчитанные значения строки (total_cost, vat_cost,
-    total_with_vat). Если их нет — сумма восстанавливается по массе и цене.
+    total_with_vat). Если их нет — сумма восстанавливается по цене и
+    количеству в выбранной единице (для «шт» — штуки, для остальных — масса).
     """
     total_cost = 0.0
     total_vat = 0.0
@@ -188,9 +181,7 @@ def calculate_vat_totals(cargos):
         with_vat = parse_amount(c.get('total_with_vat'))
 
         if cost == 0 and with_vat == 0:
-            qty = parse_amount(c.get('cargo_qty'))
-            price = parse_amount(c.get('price'))
-            cost = round(qty * price, 2)
+            cost = calculate_cargo_cost(c)
 
         if vat == 0 and str(c.get('vat_rate', '')).strip() == '20%':
             vat = round(cost * 0.20, 2)

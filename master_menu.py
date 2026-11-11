@@ -10,6 +10,7 @@ from utils import (safe_edit_message_text, status_ru, strip_driver_prefix,
                    number_to_text, calculate_total_places_text_master,
                    calculate_vat_totals, amount_to_words_parts)
 from keyboards import get_main_keyboard
+from pricing import is_piece_unit, refresh_cargo_cost
 from word_filler import fill_documents, convert_to_pdf
 import orders_db
 
@@ -395,6 +396,13 @@ def rebuild_word_from_order(order_id, output_dir=None):
     order = orders_db.get_order(order_id)
     if not order: return None
     cargos = orders_db.get_cargos(order_id)
+    recalculated = False
+    for cargo in cargos:
+        if is_piece_unit(cargo.get('unit')):
+            recalculated = refresh_cargo_cost(cargo) or recalculated
+    if recalculated:
+        orders_db.save_cargos(order_id, cargos)
+        orders_db.recalculate_order_totals(order_id)
     date_parts = order['date'].split('.')
     driver_clean = strip_driver_prefix(order.get('driver_name', ''))
     cargo_accepted = f"Водитель {driver_clean}" if driver_clean else ''

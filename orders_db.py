@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 
 from log_setup import get_logger
+from pricing import calculate_cargo_cost
 
 logger = get_logger(__name__)
 DB_FILE = os.environ.get("TTN_DB_FILE", "orders.db")
@@ -404,13 +405,8 @@ def recalculate_order_totals(order_id):
     cargos = get_cargos(order_id)
     total_cost = 0.0; total_with_vat = 0.0
     for c in cargos:
-        try:
-            qty = float(str(c.get('cargo_qty','0')).replace(',', '.'))
-            price = float(str(c.get('price','0')).replace(',', '.'))
-        except (ValueError, TypeError):
-            continue
-        cost = qty * price
-        vat = cost * 0.20 if c.get('vat_rate') == '20%' else 0.0
+        cost = calculate_cargo_cost(c)
+        vat = round(cost * 0.20, 2) if c.get('vat_rate') == '20%' else 0.0
         total_cost += cost; total_with_vat += cost + vat
     total_cost = round(total_cost, 2); total_with_vat = round(total_with_vat, 2)
     conn = get_connection(); cursor = conn.cursor()

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from config import bot, user_data, master_edit_state, YOUR_TELEGRAM_ID
 from utils import safe_edit_message_text, parse_order_index
+from pricing import is_piece_unit, refresh_cargo_cost
 from keyboards import get_main_keyboard
 from master_menu import show_master_menu, rebuild_word_from_order
 import orders_db
@@ -398,9 +399,14 @@ def save_cargo_qty(message):
         bot.register_next_step_handler(message, save_cargo_qty); return
     order_id = state['order_id']; index = state['cargo_index']
     cargos = orders_db.get_cargos(order_id)
+    recalculated = False
     if index < len(cargos):
         cargos[index]['quantity'] = text.replace('.', ',')
+        if is_piece_unit(cargos[index].get('unit')):
+            recalculated = refresh_cargo_cost(cargos[index])
         orders_db.save_cargos(order_id, cargos, actor_id=user_id)
+        if recalculated:
+            orders_db.recalculate_order_totals(order_id)
     try:
         merged = rebuild_word_from_order(order_id)
         if merged:
@@ -420,9 +426,14 @@ def medit_equal(call):
     if order_id is None:
         bot.answer_callback_query(call.id, "Ошибка данных."); return
     cargos = orders_db.get_cargos(order_id)
+    recalculated = False
     if index < len(cargos):
         cargos[index]['quantity'] = cargos[index].get('cargo_qty', '')
+        if is_piece_unit(cargos[index].get('unit')):
+            recalculated = refresh_cargo_cost(cargos[index])
         orders_db.save_cargos(order_id, cargos, actor_id=user_id)
+        if recalculated:
+            orders_db.recalculate_order_totals(order_id)
     bot.answer_callback_query(call.id, "✅ Количество = масса")
     try:
         merged = rebuild_word_from_order(order_id)
@@ -591,19 +602,11 @@ def save_master_vat(call):
         bot.answer_callback_query(call.id, "Сессия истекла."); return
     index = state['cargo_index']; order_id = state['order_id']
     cargos = state['cargos']; cargo = cargos[index]
-    try:
-        qty = float(str(cargo.get('cargo_qty', '0')).replace(',', '.'))
-    except Exception:
-        qty = 0
-    price = float(cargo.get('price', 0))
-    total_cost = round(qty * price, 2)
     if call.data == 'master_vat_20':
-        vat_rate = '20%'; vat_cost = round(total_cost * 0.20, 2)
+        cargo['vat_rate'] = '20%'
     else:
-        vat_rate = 'Без НДС'; vat_cost = 0.0
-    total_with_vat = round(total_cost + vat_cost, 2)
-    cargo['vat_rate'] = vat_rate; cargo['total_cost'] = total_cost
-    cargo['vat_cost'] = vat_cost; cargo['total_with_vat'] = total_with_vat
+        cargo['vat_rate'] = 'Без НДС'
+    refresh_cargo_cost(cargo)
     orders_db.save_cargos(order_id, cargos, actor_id=user_id)
     orders_db.recalculate_order_totals(order_id)
     try:
