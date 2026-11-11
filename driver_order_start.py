@@ -413,7 +413,8 @@ def handle_unloading_selection(call):
                                     f"🚜 *Площадка (Трал)*\n\n"
                                     f"Выберите категорию груза:",
                                parse_mode='Markdown',
-                               reply_markup=get_platform_categories_keyboard())
+                               reply_markup=get_platform_categories_keyboard(
+                                   admin=user_id == YOUR_TELEGRAM_ID))
     else:
         safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
                                text=f"✅ {loc_info['name']}\n\n📦 Выберите тип груза:",

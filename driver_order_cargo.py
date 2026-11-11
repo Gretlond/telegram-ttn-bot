@@ -1,7 +1,7 @@
 # =============================================================
 # ВОДИТЕЛЬ: СТАНДАРТНЫЙ ГРУЗ (САМОСВАЛ)
 # =============================================================
-from config import bot, user_data
+from config import bot, user_data, YOUR_TELEGRAM_ID
 from utils import safe_edit_message_text, number_to_text
 from keyboards import (get_cargo_type_keyboard, get_cargo_subcategory_keyboard,
                        get_cargo_distance_keyboard, get_unit_keyboard,
@@ -151,7 +151,8 @@ def add_more_cargo(call):
         safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
                                text="🚜 Выберите *категорию следующего груза*:",
                                parse_mode='Markdown',
-                               reply_markup=get_platform_categories_keyboard())
+                               reply_markup=get_platform_categories_keyboard(
+                                   admin=user_id == YOUR_TELEGRAM_ID))
     else:
         safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
                                text="📦 Выберите тип груза:",

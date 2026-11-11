@@ -135,6 +135,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         )
         m.add(
             types.InlineKeyboardButton("🚜 Грузы площадок", callback_data="adm_list_plat"),
+            types.InlineKeyboardButton("📁 Категории площадок", callback_data="adm_list_pcat"),
         )
         m.add(types.InlineKeyboardButton("📋 Реквизиты ТТН", callback_data="adm_ttn_header"))
         m.add(types.InlineKeyboardButton("🩺 Состояние бота", callback_data="adm_health"))

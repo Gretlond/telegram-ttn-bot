@@ -11,6 +11,7 @@ from keyboards import (get_main_keyboard, get_platform_cargos_keyboard,
                        get_platform_places_keyboard,
                        get_platform_new_cargo_category_keyboard)
 from database import PLATFORM_CATEGORIES, PLATFORM_CARGOS, UNITS
+import database
 from driver_order_ui import show_cargos_menu
 
 from log_setup import get_logger
@@ -37,7 +38,8 @@ def handle_platform_category(call):
     safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
                            text=f"*{cat_name}*\n\nВыберите груз:",
                            parse_mode='Markdown',
-                           reply_markup=get_platform_cargos_keyboard(cat_id))
+                           reply_markup=get_platform_cargos_keyboard(
+                               cat_id, admin=user_id == YOUR_TELEGRAM_ID))
 
 
 @bot.callback_query_handler(func=lambda c: c.data == 'p_cargo_back_cats')
@@ -46,7 +48,105 @@ def handle_p_cargo_back_cats(call):
     safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
                            text="🚜 *Площадка (Трал)*\n\nВыберите категорию груза:",
                            parse_mode='Markdown',
-                           reply_markup=get_platform_categories_keyboard())
+                           reply_markup=get_platform_categories_keyboard(
+                               admin=user_id == YOUR_TELEGRAM_ID))
+
+
+def show_platform_categories_screen(user_id):
+    bot.send_message(user_id,
+                     "🚜 *Площадка (Трал)*\n\nВыберите категорию груза:",
+                     parse_mode='Markdown',
+                     reply_markup=get_platform_categories_keyboard(
+                         admin=user_id == YOUR_TELEGRAM_ID))
+
+
+def show_platform_cargos_screen(user_id, cat_id):
+    cat = PLATFORM_CATEGORIES.get(cat_id, {})
+    bot.send_message(user_id,
+                     f"{cat.get('icon', '📦')} *{cat.get('name', '')}*\n\n"
+                     f"Выберите груз:",
+                     parse_mode='Markdown',
+                     reply_markup=get_platform_cargos_keyboard(
+                         cat_id, admin=user_id == YOUR_TELEGRAM_ID))
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'p_cat_add')
+def handle_p_cat_add(call):
+    user_id = call.message.chat.id
+    if user_id != YOUR_TELEGRAM_ID:
+        bot.answer_callback_query(call.id, "⛔ Только администратор.")
+        return
+    bot.answer_callback_query(call.id)
+    user_data.setdefault(user_id, {})['platform_admin_add_category'] = True
+    safe_edit_message_text(
+        chat_id=user_id, message_id=call.message.message_id,
+        text="📁 Введите *название новой категории* (например, ЖБИ):\n\n"
+             "_Иконку можно изменить в админ-меню._\n\n_Отмена: /cancel_",
+        parse_mode='Markdown')
+    bot.register_next_step_handler_by_chat_id(user_id, save_platform_category_name)
+
+
+def save_platform_category_name(message):
+    user_id = message.chat.id
+    data = user_data.get(user_id, {})
+    if not data.pop('platform_admin_add_category', None):
+        return
+    text = (message.text or '').strip()
+    if text.lower() in ('/cancel', 'отмена'):
+        bot.send_message(user_id, "❌ Отменено.")
+        show_platform_categories_screen(user_id)
+        return
+    if len(text) < 2:
+        data['platform_admin_add_category'] = True
+        bot.send_message(user_id, "❌ Слишком короткое название (или /cancel):")
+        bot.register_next_step_handler(message, save_platform_category_name)
+        return
+    database.add_platform_category(text, "📦")
+    bot.send_message(user_id, f"✅ Категория добавлена: 📦 {text}")
+    show_platform_categories_screen(user_id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('p_cargo_add::'))
+def handle_p_cargo_add(call):
+    user_id = call.message.chat.id
+    if user_id != YOUR_TELEGRAM_ID:
+        bot.answer_callback_query(call.id, "⛔ Только администратор.")
+        return
+    cat_id = call.data.split('::', 1)[1]
+    if cat_id not in PLATFORM_CATEGORIES:
+        bot.answer_callback_query(call.id, "Категория не найдена.")
+        return
+    bot.answer_callback_query(call.id)
+    data = user_data.setdefault(user_id, {})
+    data['platform_admin_add_cargo_cat'] = cat_id
+    cat = PLATFORM_CATEGORIES.get(cat_id, {})
+    safe_edit_message_text(
+        chat_id=user_id, message_id=call.message.message_id,
+        text=f"➕ Введите *название нового груза* для категории "
+             f"«{cat.get('name', '')}»:\n\n_Отмена: /cancel_",
+        parse_mode='Markdown')
+    bot.register_next_step_handler_by_chat_id(user_id, save_platform_cargo_name)
+
+
+def save_platform_cargo_name(message):
+    user_id = message.chat.id
+    data = user_data.get(user_id, {})
+    cat_id = data.pop('platform_admin_add_cargo_cat', None)
+    if not cat_id:
+        return
+    text = (message.text or '').strip()
+    if text.lower() in ('/cancel', 'отмена'):
+        bot.send_message(user_id, "❌ Отменено.")
+        show_platform_cargos_screen(user_id, cat_id)
+        return
+    if len(text) < 2:
+        data['platform_admin_add_cargo_cat'] = cat_id
+        bot.send_message(user_id, "❌ Слишком короткое название (или /cancel):")
+        bot.register_next_step_handler(message, save_platform_cargo_name)
+        return
+    database.add_platform_cargo(text, cat_id)
+    bot.send_message(user_id, f"✅ Груз добавлен: {text}")
+    show_platform_cargos_screen(user_id, cat_id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('p_cargo_name::'))

@@ -58,21 +58,26 @@ def get_platform_places_keyboard():
     return m
 
 # --- Клавиатуры для площадок (Категории и Грузы) ---
-def get_platform_categories_keyboard():
+def get_platform_categories_keyboard(admin=False):
     m = types.InlineKeyboardMarkup(row_width=1)
     for cat_id, cat_info in PLATFORM_CATEGORIES.items():
         icon = cat_info.get('icon', '📦')
         name = cat_info.get('name', 'Без названия')
         m.add(types.InlineKeyboardButton(f"{icon} {name}", callback_data=f"p_cat::{cat_id}"))
+    if admin:
+        m.add(types.InlineKeyboardButton("➕ Добавить категорию", callback_data="p_cat_add"))
     m.add(types.InlineKeyboardButton("➕ Ввести свой груз", callback_data="p_cargo_custom"))
     m.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back_unloading"))
     return m
 
-def get_platform_cargos_keyboard(category_id):
+def get_platform_cargos_keyboard(category_id, admin=False):
     m = types.InlineKeyboardMarkup(row_width=1)
     for cid, c in PLATFORM_CARGOS.items():
         if c.get('category') != category_id: continue
         m.add(types.InlineKeyboardButton(c['name'], callback_data=f"p_cargo_name::{cid}"))
+    if admin:
+        m.add(types.InlineKeyboardButton("➕ Добавить груз в категорию",
+                                         callback_data=f"p_cargo_add::{category_id}"))
     cat = PLATFORM_CATEGORIES.get(category_id, {})
     back_text = f"⬅️ Назад к {cat.get('name', 'категориям')}"
     m.add(types.InlineKeyboardButton(back_text, callback_data="p_cargo_back_cats"))
