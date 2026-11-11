@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from config import bot, user_data, master_edit_state, YOUR_TELEGRAM_ID
 from utils import safe_edit_message_text, parse_order_index
-from pricing import is_piece_unit, refresh_cargo_cost
+from pricing import uses_quantity_for_cost, refresh_cargo_cost
 from keyboards import get_main_keyboard
 from master_menu import show_master_menu, rebuild_word_from_order
 import orders_db
@@ -402,7 +402,7 @@ def save_cargo_qty(message):
     recalculated = False
     if index < len(cargos):
         cargos[index]['quantity'] = text.replace('.', ',')
-        if is_piece_unit(cargos[index].get('unit')):
+        if uses_quantity_for_cost(cargos[index].get('unit')):
             recalculated = refresh_cargo_cost(cargos[index])
         orders_db.save_cargos(order_id, cargos, actor_id=user_id)
         if recalculated:
@@ -429,7 +429,7 @@ def medit_equal(call):
     recalculated = False
     if index < len(cargos):
         cargos[index]['quantity'] = cargos[index].get('cargo_qty', '')
-        if is_piece_unit(cargos[index].get('unit')):
+        if uses_quantity_for_cost(cargos[index].get('unit')):
             recalculated = refresh_cargo_cost(cargos[index])
         orders_db.save_cargos(order_id, cargos, actor_id=user_id)
         if recalculated:

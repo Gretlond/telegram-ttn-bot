@@ -10,7 +10,7 @@ from utils import (safe_edit_message_text, status_ru, strip_driver_prefix,
                    number_to_text, calculate_total_places_text_master,
                    calculate_vat_totals, amount_to_words_parts)
 from keyboards import get_main_keyboard
-from pricing import is_piece_unit, refresh_cargo_cost
+from pricing import uses_quantity_for_cost, refresh_cargo_cost
 from word_filler import fill_documents, convert_to_pdf
 import orders_db
 
@@ -398,7 +398,7 @@ def rebuild_word_from_order(order_id, output_dir=None):
     cargos = orders_db.get_cargos(order_id)
     recalculated = False
     for cargo in cargos:
-        if is_piece_unit(cargo.get('unit')):
+        if uses_quantity_for_cost(cargo.get('unit')):
             recalculated = refresh_cargo_cost(cargo) or recalculated
     if recalculated:
         orders_db.save_cargos(order_id, cargos)

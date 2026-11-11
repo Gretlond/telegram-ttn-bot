@@ -1,7 +1,7 @@
 import pytest
 
 import orders_db
-from pricing import billable_quantity, calculate_cargo_cost, is_piece_unit
+from pricing import billable_quantity, calculate_cargo_cost, uses_quantity_for_cost
 from utils import calculate_vat_totals
 
 
@@ -13,7 +13,7 @@ def test_piece_unit_uses_quantity():
         "price": "3.0",
     }
 
-    assert is_piece_unit(cargo["unit"]) is True
+    assert uses_quantity_for_cost(cargo["unit"]) is True
     assert billable_quantity(cargo) == 4
     assert calculate_cargo_cost(cargo) == 12.0
 
@@ -44,8 +44,21 @@ def test_ton_unit_still_uses_mass():
         "price": "85.31",
     }
 
+    assert uses_quantity_for_cost(cargo["unit"]) is False
     assert billable_quantity(cargo) == 0.045
     assert calculate_cargo_cost(cargo) == 3.84
+
+
+def test_volume_unit_uses_quantity():
+    cargo = {
+        "unit": "м³",
+        "quantity": "2.5",
+        "cargo_qty": "4.8",
+        "price": "1200",
+    }
+
+    assert uses_quantity_for_cost(cargo["unit"]) is True
+    assert calculate_cargo_cost(cargo) == 3000.0
 
 
 def test_calculate_vat_totals_piece_unit_falls_back_to_quantity():
