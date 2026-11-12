@@ -814,6 +814,11 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
             return
         action = st['action']
 
+        if action == 'add_sub_distance':
+            bot.send_message(uid, "Выберите вариант на клавиатуре выше "
+                                  "или отправьте /cancel.")
+            return
+
         if action == 'add_drv_name':
             if len(text) < 3:
                 bot.send_message(uid, "❌ Слишком короткое ФИО:");
@@ -1269,7 +1274,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
             bot.send_message(uid, "❌ Слишком коротко:");
             return
         ct_id = st['ct_id']
-        state[uid] = {'action': 'await_sub_distance', 'ct_id': ct_id, 'name': text}
+        state[uid] = {'action': 'add_sub_distance', 'ct_id': ct_id, 'name': text}
         m = types.InlineKeyboardMarkup(row_width=1)
         m.add(types.InlineKeyboardButton(
             "📏 Спрашивать расстояние", callback_data=f"adm_ct_sub_new|{ct_id}|yes"))
@@ -1287,7 +1292,7 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
         uid = call.message.chat.id
         _, ct_id, mode = call.data.split('|', 2)
         st = state.get(uid)
-        if (not st or st.get('action') != 'await_sub_distance'
+        if (not st or st.get('action') != 'add_sub_distance'
                 or st.get('ct_id') != ct_id):
             bot.answer_callback_query(call.id, "Сессия истекла. Добавьте заново.")
             return
