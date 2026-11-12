@@ -6,7 +6,8 @@ from utils import safe_edit_message_text, number_to_text
 from keyboards import (get_cargo_type_keyboard, get_cargo_subcategory_keyboard,
                        get_cargo_distance_keyboard, get_unit_keyboard,
                        get_platform_categories_keyboard)
-from database import CARS, CARGO_TYPES, CARGO_DISTANCES, UNITS
+from database import (CARS, CARGO_TYPES, CARGO_DISTANCES, UNITS,
+                      subcategory_has_distance, subcategory_name)
 from driver_order_ui import show_cargos_menu, show_summary
 
 
@@ -48,10 +49,12 @@ def handle_cargo_subcategory(call):
     subs = cargo_info.get('subcategories') or {}
     if sub_id not in subs:
         bot.answer_callback_query(call.id, "Ошибка"); return
-    user_data[user_id]['cargo_sub'] = subs[sub_id]
-    if cargo_info.get('has_distance'):
+    sub_value = subs[sub_id]
+    sub_name = subcategory_name(sub_value)
+    user_data[user_id]['cargo_sub'] = sub_name
+    if subcategory_has_distance(cargo_info, sub_value):
         safe_edit_message_text(chat_id=user_id, message_id=call.message.message_id,
-                               text=f"✅ {subs[sub_id]}\n\nВыберите расстояние:",
+                               text=f"✅ {sub_name}\n\nВыберите расстояние:",
                                reply_markup=get_cargo_distance_keyboard(cargo_id))
     else:
         finalize_cargo(user_id, call.message.message_id)

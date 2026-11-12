@@ -4,7 +4,8 @@
 from telebot import types
 from database import (CARS, DRIVERS, TRAILERS, LOCATIONS, COMPANIES,
                       CARGO_TYPES, CARGO_DISTANCES, UNITS,
-                      PLATFORM_CARGOS, PLATFORM_CATEGORIES, trailer_number)
+                      PLATFORM_CARGOS, PLATFORM_CATEGORIES, trailer_number,
+                      subcategory_name)
 
 def get_main_keyboard():
     m = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -137,8 +138,9 @@ def get_cargo_subcategory_keyboard(cargo_id):
     m = types.InlineKeyboardMarkup(row_width=1)
     cargo_info = CARGO_TYPES.get(cargo_id, {})
     subcategories = cargo_info.get('subcategories') or {}
-    for sub_id, sub_name in subcategories.items():
-        m.add(types.InlineKeyboardButton(sub_name, callback_data=f"cargo_sub::{cargo_id}::{sub_id}"))
+    for sub_id, sub_value in subcategories.items():
+        m.add(types.InlineKeyboardButton(subcategory_name(sub_value),
+                                         callback_data=f"cargo_sub::{cargo_id}::{sub_id}"))
     m.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back_cargo_type"))
     return m
 

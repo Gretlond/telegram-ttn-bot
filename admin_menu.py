@@ -711,8 +711,10 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
                     f"Подкатегорий: {len(subs)}\n")
             if subs:
                 text += "\n"
-                for sid, sname in subs.items():
-                    text += f"  • {sname}\n"
+                for sid, sub_value in subs.items():
+                    sname = database.subcategory_name(sub_value)
+                    sub_dist = database.subcategory_has_distance(item, sub_value)
+                    text += f"  • {sname} — расстояние: {'да' if sub_dist else 'нет'}\n"
             m.add(types.InlineKeyboardButton("✏️ Название", callback_data=f"adm_editfld|ct|{item_id}|name"))
             toggle_label = "⚙️ Расстояния: вкл" if item.get('has_distance') else "⚙️ Расстояния: выкл"
             m.add(types.InlineKeyboardButton(toggle_label, callback_data=f"adm_ct_toggle_dist|{item_id}"))
@@ -1219,13 +1221,19 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
             return
         subs = ct.get('subcategories') or {}
         text = f"📋 *Подкатегории «{ct['name']}»* ({len(subs)}):\n\n"
+        if subs:
+            text += "_📏 — для этой подкатегории нужно выбирать расстояние._\n\n"
         m = types.InlineKeyboardMarkup(row_width=1)
         if not subs:
             text += "_Пусто._\n"
         else:
-            for sid, sname in subs.items():
-                m.add(types.InlineKeyboardButton(sname,
-                                                 callback_data=f"adm_ct_sub_show|{ct_id}|{sid}"))
+            for sid, sub_value in subs.items():
+                sname = database.subcategory_name(sub_value)
+                dist = (" 📏" if database.subcategory_has_distance(ct, sub_value)
+                        else "")
+                m.add(types.InlineKeyboardButton(
+                    f"{sname}{dist}",
+                    callback_data=f"adm_ct_sub_show|{ct_id}|{sid}"))
         m.add(types.InlineKeyboardButton("➕ Добавить", callback_data=f"adm_ct_sub_add|{ct_id}"))
         m.add(types.InlineKeyboardButton("⬅️ К материалу", callback_data=f"adm_show|ct|{ct_id}"))
         if msg_id:
@@ -1261,39 +1269,109 @@ def register(bot, masters_dict, save_masters_fn, admin_id):
             bot.send_message(uid, "❌ Слишком коротко:");
             return
         ct_id = st['ct_id']
-        database.add_subcategory(ct_id, text)
+        state[uid] = {'action': 'await_sub_distance', 'ct_id': ct_id, 'name': text}
+        m = types.InlineKeyboardMarkup(row_width=1)
+        m.add(types.InlineKeyboardButton(
+            "📏 Спрашивать расстояние", callback_data=f"adm_ct_sub_new|{ct_id}|yes"))
+        m.add(types.InlineKeyboardButton(
+            "🚫 Без расстояния", callback_data=f"adm_ct_sub_new|{ct_id}|no"))
+        m.add(types.InlineKeyboardButton(
+            "↩️ Как у материала", callback_data=f"adm_ct_sub_new|{ct_id}|inherit"))
+        bot.send_message(uid,
+                         f"📋 Подкатегория: {text}\n\nЗапрашивать расстояние?",
+                         reply_markup=m)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith('adm_ct_sub_new|'))
+    def cb_adm_ct_sub_new(call):
+        if not check(call): return
+        uid = call.message.chat.id
+        _, ct_id, mode = call.data.split('|', 2)
+        st = state.get(uid)
+        if (not st or st.get('action') != 'await_sub_distance'
+                or st.get('ct_id') != ct_id):
+            bot.answer_callback_query(call.id, "Сессия истекла. Добавьте заново.")
+            return
+        has_distance = {'yes': True, 'no': False}.get(mode)
+        database.add_subcategory(ct_id, st['name'], has_distance=has_distance)
         state.pop(uid, None)
-        bot.send_message(uid, f"✅ Подкатегория добавлена: {text}")
-        render_subs(ct_id, uid)
+        bot.answer_callback_query(call.id, "✅ Подкатегория добавлена.")
+        render_subs(ct_id, uid, call.message.message_id)
 
     @bot.callback_query_handler(func=lambda c: c.data.startswith('adm_ct_sub_show|'))
     def cb_adm_ct_sub_show(call):
         if not check(call): return
         _, ct_id, sub_id = call.data.split('|', 2)
+        bot.answer_callback_query(call.id)
+        render_sub(ct_id, sub_id, call.message.chat.id, call.message.message_id)
+
+    def render_sub(ct_id, sub_id, uid, msg_id=None):
         ct = database.CARGO_TYPES.get(ct_id)
         if not ct:
-            bot.answer_callback_query(call.id, "Не найдено.");
+            bot.send_message(uid, "Не найдено.")
             return
         subs = ct.get('subcategories') or {}
         if sub_id not in subs:
-            bot.answer_callback_query(call.id, "Не найдено.");
+            bot.send_message(uid, "Не найдено.")
             return
-        sub_name = subs[sub_id]
-        bot.answer_callback_query(call.id)
+        value = subs[sub_id]
+        sub_name = database.subcategory_name(value)
+        needs_distance = database.subcategory_has_distance(ct, value)
+        if database.subcategory_distance_is_custom(value):
+            dist_note = "задано для подкатегории"
+        else:
+            dist_note = "как у материала"
         m = types.InlineKeyboardMarkup(row_width=1)
-        m.add(types.InlineKeyboardButton("✏️ Переименовать",
-                                         callback_data=f"adm_ct_sub_ren|{ct_id}|{sub_id}"))
-        m.add(types.InlineKeyboardButton("🗑 Удалить",
-                                         callback_data=f"adm_ct_sub_del|{ct_id}|{sub_id}"))
-        m.add(types.InlineKeyboardButton("⬅️ К подкатегориям",
-                                         callback_data=f"adm_ct_subs|{ct_id}"))
-        try:
-            bot.edit_message_text(chat_id=call.message.chat.id,
-                                  message_id=call.message.message_id,
-                                  text=f"📋 *Подкатегория*\n\n{sub_name}",
-                                  parse_mode='Markdown', reply_markup=m)
-        except Exception:
-            pass
+        toggle = ("📏 Расстояние: выкл" if needs_distance
+                  else "📏 Расстояние: вкл")
+        m.add(types.InlineKeyboardButton(
+            toggle, callback_data=f"adm_ct_sub_dist|{ct_id}|{sub_id}"))
+        if database.subcategory_distance_is_custom(value):
+            m.add(types.InlineKeyboardButton(
+                "↩️ Как у материала",
+                callback_data=f"adm_ct_sub_dist_reset|{ct_id}|{sub_id}"))
+        m.add(types.InlineKeyboardButton(
+            "✏️ Переименовать",
+            callback_data=f"adm_ct_sub_ren|{ct_id}|{sub_id}"))
+        m.add(types.InlineKeyboardButton(
+            "🗑 Удалить",
+            callback_data=f"adm_ct_sub_del|{ct_id}|{sub_id}"))
+        m.add(types.InlineKeyboardButton(
+            "⬅️ К подкатегориям", callback_data=f"adm_ct_subs|{ct_id}"))
+        text = (f"📋 *Подкатегория*\n\n{sub_name}\n\n"
+                f"Расстояние: {'вкл' if needs_distance else 'выкл'} "
+                f"({dist_note})")
+        if msg_id:
+            try:
+                bot.edit_message_text(chat_id=uid, message_id=msg_id, text=text,
+                                      parse_mode='Markdown', reply_markup=m)
+                return
+            except Exception:
+                pass
+        bot.send_message(uid, text, parse_mode='Markdown', reply_markup=m)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith('adm_ct_sub_dist|'))
+    def cb_adm_ct_sub_dist(call):
+        if not check(call): return
+        _, ct_id, sub_id = call.data.split('|', 2)
+        ct = database.CARGO_TYPES.get(ct_id)
+        subs = (ct or {}).get('subcategories') or {}
+        if not ct or sub_id not in subs:
+            bot.answer_callback_query(call.id, "Не найдено.")
+            return
+        current = database.subcategory_has_distance(ct, subs[sub_id])
+        database.set_subcategory_distance(ct_id, sub_id, not current)
+        bot.answer_callback_query(call.id, "✅ Обновлено.")
+        render_sub(ct_id, sub_id, call.message.chat.id, call.message.message_id)
+
+    @bot.callback_query_handler(func=lambda c: c.data.startswith('adm_ct_sub_dist_reset|'))
+    def cb_adm_ct_sub_dist_reset(call):
+        if not check(call): return
+        _, ct_id, sub_id = call.data.split('|', 2)
+        if not database.reset_subcategory_distance(ct_id, sub_id):
+            bot.answer_callback_query(call.id, "Не найдено.")
+            return
+        bot.answer_callback_query(call.id, "✅ Как у материала.")
+        render_sub(ct_id, sub_id, call.message.chat.id, call.message.message_id)
 
     @bot.callback_query_handler(func=lambda c: c.data.startswith('adm_ct_sub_ren|'))
     def cb_adm_ct_sub_ren(call):

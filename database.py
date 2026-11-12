@@ -312,19 +312,62 @@ def delete_cargo_type(ct_id):
     if ct_id not in CARGO_TYPES: return False
     del CARGO_TYPES[ct_id]; save_cargo_types(); return True
 
-def add_subcategory(ct_id, name):
+def add_subcategory(ct_id, name, has_distance=None):
     if ct_id not in CARGO_TYPES: return None
     if not CARGO_TYPES[ct_id].get('subcategories'): CARGO_TYPES[ct_id]['subcategories'] = {}
     sub_id = next_id("sub", CARGO_TYPES[ct_id]['subcategories'])
-    CARGO_TYPES[ct_id]['subcategories'][sub_id] = name
+    CARGO_TYPES[ct_id]['subcategories'][sub_id] = (
+        name if has_distance is None
+        else {'name': name, 'has_distance': bool(has_distance)})
     save_cargo_types(); return sub_id
 
 def update_subcategory(ct_id, sub_id, name):
     if ct_id not in CARGO_TYPES: return False
     subs = CARGO_TYPES[ct_id].get('subcategories') or {}
     if sub_id not in subs: return False
-    subs[sub_id] = name
+    current = subs[sub_id]
+    if isinstance(current, dict):
+        current['name'] = name
+    else:
+        subs[sub_id] = name
     save_cargo_types(); return True
+
+def set_subcategory_distance(ct_id, sub_id, has_distance):
+    if ct_id not in CARGO_TYPES: return False
+    subs = CARGO_TYPES[ct_id].get('subcategories') or {}
+    if sub_id not in subs: return False
+    current = subs[sub_id]
+    if isinstance(current, dict):
+        current['has_distance'] = bool(has_distance)
+    else:
+        subs[sub_id] = {'name': current, 'has_distance': bool(has_distance)}
+    save_cargo_types(); return True
+
+def reset_subcategory_distance(ct_id, sub_id):
+    if ct_id not in CARGO_TYPES: return False
+    subs = CARGO_TYPES[ct_id].get('subcategories') or {}
+    if sub_id not in subs: return False
+    current = subs[sub_id]
+    if isinstance(current, dict):
+        subs[sub_id] = current.get('name', '')
+        save_cargo_types()
+    return True
+
+def subcategory_name(value):
+    """Название подкатегории в старом (строка) и новом (словарь) формате."""
+    if isinstance(value, dict):
+        return str(value.get('name', ''))
+    return str(value or '')
+
+def subcategory_has_distance(cargo_info, value):
+    """Нужно ли спрашивать расстояние для подкатегории."""
+    if isinstance(value, dict) and 'has_distance' in value:
+        return bool(value['has_distance'])
+    return bool((cargo_info or {}).get('has_distance', False))
+
+def subcategory_distance_is_custom(value):
+    return isinstance(value, dict) and 'has_distance' in value
+
 
 def delete_subcategory(ct_id, sub_id):
     if ct_id not in CARGO_TYPES: return False
