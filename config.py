@@ -43,17 +43,25 @@ def load_masters():
         try:
             with open(MASTERS_FILE, "r", encoding="utf-8") as f:
                 raw = json.load(f)
-            data = {int(k): v for k, v in raw.items()}
+            for key, value in raw.items():
+                try:
+                    master_id = int(key)
+                except (TypeError, ValueError):
+                    logger.warning(f"⚠️ load_masters: пропущен нечисловой ID {key!r}")
+                    continue
+                if master_id <= 0:
+                    logger.warning(f"⚠️ load_masters: пропущен невалидный ID {master_id}")
+                    continue
+                data[master_id] = value
             logger.info(f"✅ Загружено мастеров: {len(data)}")
         except Exception as e:
             logger.exception(f"⚠️ load_masters: {e}")
             data = {}
-    if YOUR_TELEGRAM_ID not in data:
+    if YOUR_TELEGRAM_ID > 0 and YOUR_TELEGRAM_ID not in data:
         data[YOUR_TELEGRAM_ID] = {
             "name": "Администратор",
             "locations": list(LOCATIONS.keys())
         }
-    data = {int(k): v for k, v in data.items()}
     MASTERS.clear()
     MASTERS.update(data)
     save_masters()

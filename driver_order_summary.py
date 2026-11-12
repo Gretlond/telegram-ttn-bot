@@ -188,10 +188,15 @@ def confirm_order(call):
         master_ids = find_masters_by_loading(data.get('loading_point', ''))
         if not master_ids:
             # Не теряем заявку: отправляем администратору, чтобы он назначил мастера.
-            master_ids = [YOUR_TELEGRAM_ID]
             _notify_admin_safe(
                 f"⚠️ Для заявки водителя {user_id} не найден мастер по погрузке "
                 f"«{data.get('loading_point', '')}». Заявка сохранена для администратора.")
+            if YOUR_TELEGRAM_ID > 0:
+                master_ids = [YOUR_TELEGRAM_ID]
+        if not master_ids:
+            bot.send_message(user_id, "❌ В системе не настроен администратор. "
+                                      "Обратитесь к ответственному за бота.")
+            return
 
         created = []
         save_errors = []

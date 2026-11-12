@@ -117,3 +117,36 @@ def test_document_failure_marks_delivery_failed(monkeypatch):
     assert order_id == 1
     assert status == 'failed'
     assert 'network unavailable' in error
+
+
+def test_order_without_master_goes_to_admin(monkeypatch):
+    save_calls = []
+    summary, user_data = prepare(monkeypatch, save_calls)
+    monkeypatch.setattr(summary, 'find_masters_by_loading', lambda loading: [])
+    monkeypatch.setattr(summary, 'YOUR_TELEGRAM_ID', 857845097)
+    uid = 7005
+    user_data[uid] = make_data()
+
+    summary.confirm_order(make_call(uid))
+
+    assert save_calls == [(857845097, uid)]
+
+
+def test_order_without_master_and_admin_is_not_saved_for_zero(monkeypatch):
+    save_calls = []
+    summary, user_data = prepare(monkeypatch, save_calls)
+    monkeypatch.setattr(summary, 'find_masters_by_loading', lambda loading: [])
+    monkeypatch.setattr(summary, 'YOUR_TELEGRAM_ID', 0)
+    uid = 7006
+    user_data[uid] = make_data()
+    sent = []
+    monkeypatch.setattr(
+        summary.bot, 'send_message',
+        lambda *args, **kwargs: (
+            sent.append(args) or SimpleNamespace(message_id=1)))
+
+    summary.confirm_order(make_call(uid))
+
+    assert save_calls == []
+    texts = [str(args[1]) for args in sent if len(args) > 1]
+    assert any('не настроен администратор' in text for text in texts)

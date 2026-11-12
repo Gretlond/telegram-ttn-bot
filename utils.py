@@ -305,16 +305,21 @@ def find_masters_by_loading(loading_name):
         if l_info['name'] == loading_name:
             loc_id = l_id
             break
+    fallback = [YOUR_TELEGRAM_ID] if YOUR_TELEGRAM_ID > 0 else []
     if not loc_id:
-        return [YOUR_TELEGRAM_ID]
+        return fallback
     master_ids = []
+    seen = set()
     for m_id, m_info in MASTERS.items():
         try:
             m_id_int = int(m_id)
         except (ValueError, TypeError):
             continue
-        if loc_id in m_info.get('locations', []):
+        if m_id_int <= 0 or m_id_int in seen:
+            continue
+        if loc_id in (m_info or {}).get('locations', []):
+            seen.add(m_id_int)
             master_ids.append(m_id_int)
     if not master_ids:
-        master_ids = [YOUR_TELEGRAM_ID]
+        master_ids = fallback
     return master_ids
